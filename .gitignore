@@ -1,0 +1,19 @@
+node_modules/
+.env.local
+.env
+*.json.bak
+
+# Ignore all JSON files by default (to protect service account keys)
+*.json
+# But allow essential config files
+!package.json
+!package-lock.json
+!vercel.json
+
+# Ignore raw data files
+*.xlsx
+*.csv
+
+# Ignore local Vercel metadata
+.vercel
+
