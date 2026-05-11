@@ -23,14 +23,13 @@ module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
 
   try {
-    let privateKey = (process.env.GOOGLE_PRIVATE_KEY || '');
+    let privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').trim();
     
-    // Hilangkan tanda kutip jika terbawa dari Vercel/env
-    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-      privateKey = privateKey.slice(1, -1);
-    }
+    // Sangat agresif membersihkan tanda kutip
+    if (privateKey.startsWith('"')) privateKey = privateKey.slice(1);
+    if (privateKey.endsWith('"')) privateKey = privateKey.slice(0, -1);
     
-    // Ganti literal \n menjadi newline asli
+    // Pastikan literal \n diubah menjadi newline asli
     privateKey = privateKey.replace(/\\n/g, '\n').trim();
 
     if (!privateKey || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
