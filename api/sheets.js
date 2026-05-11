@@ -23,7 +23,16 @@ module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
 
   try {
-    const privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+    let privateKey = (process.env.GOOGLE_PRIVATE_KEY || '');
+    
+    // Hilangkan tanda kutip jika terbawa dari Vercel/env
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    
+    // Ganti literal \n menjadi newline asli
+    privateKey = privateKey.replace(/\\n/g, '\n').trim();
+
     if (!privateKey || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
       throw new Error('Missing GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_EMAIL env vars');
     }
