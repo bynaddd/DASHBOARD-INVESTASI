@@ -291,8 +291,6 @@ function initDashboard(isFirst = true) {
       document.addEventListener('click', e => { if (!cnInput.contains(e.target) && !cnResults.contains(e.target)) cnResults.classList.remove('show'); });
     }
   }
-  initLogin();
-  checkLogin();
   document.getElementById('dateDisplay').textContent = new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 }
 
