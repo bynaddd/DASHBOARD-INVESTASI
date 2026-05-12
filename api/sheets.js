@@ -2,283 +2,272 @@ const { google } = require('googleapis');
 const path = require('path');
 const fs = require('fs');
 
-// Load .env.local untuk development lokal
-const envPath = path.join(__dirname, '..', '.env.local');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split('\n').forEach(line => {
-    const match = line.match(/^([^=]+)=(.*)$/);
-    if (match && !process.env[match[1]]) {
-      let val = match[2];
-      if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
-      process.env[match[1]] = val;
-    }
-  });
-}
-
 module.exports = async (req, res) => {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
   try {
-    let privateKey = (process.env.GOOGLE_PRIVATE_KEY || '').trim();
+    console.log('API Start', req.method);
     
-    // Sangat agresif membersihkan tanda kutip
-    if (privateKey.startsWith('"')) privateKey = privateKey.slice(1);
-    if (privateKey.endsWith('"')) privateKey = privateKey.slice(0, -1);
-    
-    // Pastikan literal \n diubah menjadi newline asli
-    privateKey = privateKey.replace(/\\n/g, '\n').trim();
+    let email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    let key = process.env.GOOGLE_PRIVATE_KEY;
+    let sheetId = process.env.GOOGLE_SHEET_ID;
+    let adminEmail = process.env.ADMIN_EMAIL;
+    let adminPass = process.env.ADMIN_PASSWORD;
 
-    if (!privateKey || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
-      throw new Error('Missing GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_EMAIL env vars');
-    }
-
-    // Autentikasi menggunakan service account
-    const auth = new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        private_key: privateKey,
-      },
-      scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.file'],
-    });
-
-    const sheets = google.sheets({ version: 'v4', auth });
-    const drive = google.drive({ version: 'v3', auth });
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-
-    // Ambil metadata untuk mendapatkan nama sheet yang benar
-    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId });
-    const existingSheets = meta.data.sheets.map(s => s.properties.title);
-    const sheetName = existingSheets[0];
-    const reviewSheetName = 'ReviewLog';
-
-    // Helper to ensure sheet exists
-    const ensureSheet = async (title, headers) => {
-      if (!existingSheets.includes(title)) {
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId: sheetId,
-          requestBody: {
-            requests: [{ addSheet: { properties: { title } } }]
-          }
-        });
-        // Add headers
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: sheetId,
-          range: `'${title}'!A1`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [headers] }
-        });
-        existingSheets.push(title); // Update local list
+    // Helper to strip quotes if present
+    const cleanEnv = (val) => {
+      if (!val) return val;
+      val = val.trim();
+      if (val.startsWith('"') && val.endsWith('"')) {
+        val = val.substring(1, val.length - 1);
       }
+      return val;
     };
 
-    if (req.method === 'POST') {
-      const { type, data, imageFile, reviewData, updateData, email, pass } = req.body;
+    email = cleanEnv(email);
+    key = cleanEnv(key);
+    sheetId = cleanEnv(sheetId);
+    adminEmail = cleanEnv(adminEmail);
+    adminPass = cleanEnv(adminPass);
 
-      if (type === 'login') {
-        const adminEmail = process.env.ADMIN_EMAIL;
-        const adminPass = process.env.ADMIN_PASSWORD;
-
-        if (email === adminEmail && pass === adminPass) {
-          return res.status(200).json({
-            success: true,
-            user: { role: 'admin', name: 'Administrator', email: adminEmail }
+    // Fallback for local development if process.env is not populated
+    if (!email || !key || !sheetId || !adminEmail || !adminPass) {
+      try {
+        const envPath = path.join(process.cwd(), '.env.local');
+        if (fs.existsSync(envPath)) {
+          const envContent = fs.readFileSync(envPath, 'utf8');
+          envContent.split('\n').forEach(line => {
+            const m = line.match(/^([^=]+)=(.*)$/);
+            if (m) {
+              const k = m[1].trim();
+              let v = m[2].trim();
+              if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+              if (k === 'GOOGLE_SERVICE_ACCOUNT_EMAIL') email = email || v;
+              if (k === 'GOOGLE_PRIVATE_KEY') key = key || v;
+              if (k === 'GOOGLE_SHEET_ID') sheetId = sheetId || v;
+              if (k === 'ADMIN_EMAIL') adminEmail = adminEmail || v;
+              if (k === 'ADMIN_PASSWORD') adminPass = adminPass || v;
+            }
           });
-        } else {
-          return res.status(401).json({ success: false, error: 'Email atau Password salah!' });
+        }
+      } catch (err) {
+        console.error('Fallback env load failed:', err.message);
+      }
+    }
+
+    if (!email || !key || !sheetId) {
+      console.error('MISSING CONFIG:', { email: !!email, key: !!key, sheetId: !!sheetId });
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Missing ENV vars', 
+        detail: { email: !!email, key: !!key, sheetId: !!sheetId } 
+      });
+    }
+
+    const cleanKey = key.replace(/\\n/g, '\n').trim();
+
+    // Handle GET for Reviews or Sheets
+    if (req.method === 'GET') {
+      const { type } = req.query;
+      
+      const auth = new google.auth.GoogleAuth({
+        credentials: { client_email: email, private_key: cleanKey },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+      const sheets = google.sheets({ version: 'v4', auth });
+
+      if (type === 'review') {
+        try {
+          const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: sheetId.trim(),
+            range: 'ReviewLog!A:G',
+          });
+          const rows = response.data.values || [];
+          const reviews = rows.slice(1).map(row => ({
+            timestamp: row[0],
+            txKey: row[1],
+            status: row[2],
+            notes: row[3],
+            reviewer: row[4],
+            correctName: row[5],
+            correctNik: row[6]
+          }));
+          return res.status(200).json({ success: true, data: reviews });
+        } catch (e) {
+          return res.status(200).json({ success: true, data: [] });
         }
       }
+    }
 
-      if (type === 'review' && reviewData) {
-        // Ensure ReviewLog sheet exists
-        await ensureSheet(reviewSheetName, ['TxKey', 'Status', 'Notes', 'Reviewer', 'Timestamp', 'CorrectName', 'CorrectNik']);
+    // Handle Login, Review, and Update (POST)
+    if (req.method === 'POST') {
+      const { type, email: inputEmail, pass: inputPass, reviewData, updateData, data: uploadData } = req.body || {};
+      
+      const auth = new google.auth.GoogleAuth({
+        credentials: { client_email: email, private_key: cleanKey },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+      const sheets = google.sheets({ version: 'v4', auth });
 
-        // Append review status to ReviewLog sheet
-        const values = [[
-          reviewData.txKey,
-          reviewData.status,
-          reviewData.notes,
-          reviewData.reviewer,
-          new Date().toISOString(),
-          reviewData.correctName || '',
-          reviewData.correctNik || ''
-        ]];
-
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: sheetId,
-          range: `'${reviewSheetName}'!A:G`,
-          valueInputOption: 'USER_ENTERED',
-          insertDataOption: 'OVERWRITE',
-          requestBody: { values },
-        });
-
-        return res.status(200).json({ success: true, message: 'Status review berhasil disimpan' });
+      // 1. Admin Login
+      if (type === 'login') {
+        if (inputEmail === adminEmail && inputPass === adminPass) {
+          return res.status(200).json({ 
+            success: true, 
+            user: { name: 'Administrator', role: 'admin', email: adminEmail } 
+          });
+        }
+        return res.status(401).json({ success: false, error: 'Email atau Password salah!' });
       }
 
+      // 2. Save Review to ReviewLog
+      if (type === 'review' && reviewData) {
+        const { txKey, status, notes, reviewer, correctName, correctNik } = reviewData;
+        const timestamp = new Date().toISOString();
+        
+        try {
+          await sheets.spreadsheets.values.append({
+            spreadsheetId: sheetId.trim(),
+            range: 'ReviewLog!A:G',
+            valueInputOption: 'RAW',
+            insertDataOption: 'INSERT_ROWS',
+            requestBody: {
+              values: [[timestamp, txKey, status, notes, reviewer, correctName, correctNik]]
+            },
+          });
+        } catch (e) {
+          if (e.message.includes('not found')) {
+            await sheets.spreadsheets.batchUpdate({
+              spreadsheetId: sheetId.trim(),
+              requestBody: {
+                requests: [{ addSheet: { properties: { title: 'ReviewLog' } } }]
+              }
+            });
+            await sheets.spreadsheets.values.append({
+              spreadsheetId: sheetId.trim(),
+              range: 'ReviewLog!A:G',
+              valueInputOption: 'RAW',
+              requestBody: {
+                values: [
+                  ["Timestamp", "TxKey", "Status", "Notes", "Reviewer", "CorrectName", "CorrectNik"],
+                  [timestamp, txKey, status, notes, reviewer, correctName, correctNik]
+                ]
+              },
+            });
+          } else throw e;
+        }
+        return res.status(200).json({ success: true });
+      }
+
+      // 3. Update Specific Row
       if (type === 'updateRow' && updateData) {
-        // Update specific row in main sheet (Columns C and E)
-        // updateData should have { rowNo, name, nik }
-        // We need to find the actual row index. Assuming rowNo is in Col A.
-        // For simplicity, we assume rowNo corresponds to the index if no sorting happened, 
-        // but better to search or use the value.
-        // Let's assume rowNo is the 1-based index including header (so rowNo + 1)
-        const rowIndex = parseInt(updateData.rowNo) + 1; 
+        const { rowNo, name, nik } = updateData;
+        const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
+        const sheetName = meta.data.sheets[0].properties.title;
         
         await sheets.spreadsheets.values.update({
-          spreadsheetId: sheetId,
-          range: `'${sheetName}'!C${rowIndex}:C${rowIndex}`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [[updateData.name]] },
+          spreadsheetId: sheetId.trim(),
+          range: `'${sheetName}'!C${rowNo + 3}:E${rowNo + 3}`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [[name, "", nik]]
+          }
         });
-
-        if (updateData.nik) {
-          await sheets.spreadsheets.values.update({
-            spreadsheetId: sheetId,
-            range: `'${sheetName}'!E${rowIndex}:E${rowIndex}`,
-            valueInputOption: 'USER_ENTERED',
-            requestBody: { values: [[`'${updateData.nik}`]] },
-          });
-        }
-
-        return res.status(200).json({ success: true, message: 'Data transaksi berhasil diperbarui' });
+        return res.status(200).json({ success: true });
       }
 
-      // Existing transaction append logic...
-      if (!data || !Array.isArray(data)) {
-        return res.status(400).json({ success: false, error: 'Data invalid' });
-      }
-
-      let imageLink = null;
-      if (imageFile && imageFile.base64) {
-        try {
-          const stream = require('stream');
-          const base64Str = imageFile.base64;
-          const mimeMatch = base64Str.match(/^data:(image\/\w+);base64,/);
-          const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-          const base64Data = base64Str.replace(/^data:image\/\w+;base64,/, "");
-          const buffer = Buffer.from(base64Data, 'base64');
-          
-          const driveRes = await drive.files.create({
-            requestBody: { name: imageFile.name || 'Bukti_TF.jpg', mimeType },
-            media: { mimeType, body: stream.Readable.from(buffer) }
-          });
-          const fileId = driveRes.data.id;
-          
-          await drive.permissions.create({
-            fileId,
-            requestBody: { role: 'reader', type: 'anyone' }
-          });
-          
-          const linkRes = await drive.files.get({ fileId, fields: 'webViewLink' });
-          imageLink = linkRes.data.webViewLink;
-        } catch (uploadErr) {
-          console.error('Gagal upload gambar ke Drive:', uploadErr);
-        }
-      }
-
-      // Format data untuk append
-      const values = data.map(row => {
-        let ket = row.keterangan || 'Tabungan';
-        if (imageLink && ket.includes('Penarikan')) {
-          ket += ` | Link TF: ${imageLink}`;
-        }
-        return [
-          row.no,
-          row.bulanTahun,
-          row.karyawan,
-          row.nominal,
-          row.nik ? `'${row.nik}` : '',
-          ket
-        ];
-      });
-
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: sheetId,
-        range: `'${sheetName}'!A:F`,
-        valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'OVERWRITE',
-        requestBody: { values },
-      });
-
-      return res.status(200).json({ success: true, message: 'Data berhasil ditambahkan' });
-    }
-
-    // GET untuk ambil data
-    const queryType = req.query.type;
-
-    if (queryType === 'review') {
-      try {
-        const response = await sheets.spreadsheets.values.get({
-          spreadsheetId: sheetId,
-          range: `'${reviewSheetName}'!A:G`,
+      // 4. Batch Upload
+      if (uploadData && Array.isArray(uploadData)) {
+        const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
+        const sheetName = meta.data.sheets[0].properties.title;
+        const values = uploadData.map(d => [d.no, d.bulanTahun, d.karyawan, d.nominal, d.nik, d.keterangan]);
+        
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: sheetId.trim(),
+          range: `'${sheetName}'!A:F`,
+          valueInputOption: 'RAW',
+          insertDataOption: 'INSERT_ROWS',
+          requestBody: { values },
         });
-        const rows = response.data.values || [];
-        const reviews = rows.slice(1).map(row => ({
-          txKey: row[0],
-          status: row[1],
-          notes: row[2],
-          reviewer: row[3],
-          timestamp: row[4],
-          correctName: row[5] || '',
-          correctNik: row[6] || ''
-        }));
-        return res.status(200).json({ success: true, data: reviews });
-      } catch (err) {
-        // Jika sheet ReviewLog belum ada, return array kosong
-        return res.status(200).json({ success: true, data: [], note: 'ReviewLog sheet not found' });
+        return res.status(200).json({ success: true });
       }
     }
 
+    // Default: Fetch Transactions (for GET with no type)
+    const auth = new google.auth.GoogleAuth({
+      credentials: { client_email: email, private_key: cleanKey },
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
+    const sheetName = meta.data.sheets[0].properties.title;
+    
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
+      spreadsheetId: sheetId.trim(),
       range: `'${sheetName}'!A:F`,
     });
 
-    const rows = response.data.values || [];
+    const allRows = response.data.values || [];
     
-    // Baris pertama = header, sisanya data
-    const header = rows[0] || [];
-    const data = rows.slice(1).map((row, index) => {
-      // Perbaiki parsing nominal: hilangkan titik (ribuan), ubah koma jadi titik (desimal)
-      let rawNominal = (row[3] || '0').toString();
-      rawNominal = rawNominal.replace(/\./g, '').replace(/,/g, '.').replace(/[^0-9.-]/g, '');
-      const nominalVal = parseFloat(rawNominal) || 0;
+    // Find the header row to determine where data starts
+    const headerIndex = allRows.findIndex(r => r.includes('Karyawan') || r.includes('KARYAWAN'));
+    const rows = headerIndex > -1 ? allRows.slice(headerIndex + 1) : allRows;
+
+    const data = rows.map((row, index) => {
+      let rawNominal = (row[3] || '0').toString().trim();
+      let isNegative = false;
+      
+      // Handle accounting negative format: (1.234,00)
+      if (rawNominal.startsWith('(') && rawNominal.endsWith(')')) {
+        isNegative = true;
+        rawNominal = rawNominal.substring(1, rawNominal.length - 1);
+      } else if (rawNominal.startsWith('-')) {
+        isNegative = true;
+        rawNominal = rawNominal.substring(1);
+      }
+
+      const nominal = (parseFloat(rawNominal.replace(/\./g, '').replace(/,/g, '.')) || 0) * (isNegative ? -1 : 1);
+      const absNominal = Math.abs(nominal);
+      const rawKet = (row[5] || (isNegative ? 'Penarikan' : 'Tabungan')).trim();
+
+      // Logika Kategorisasi Otomatis berdasarkan nominal (Request User)
+      let jenisPotongan = rawKet;
+      if (!isNegative) {
+        if (absNominal <= 100000) jenisPotongan = 'Investasi Jaminan Kerja A';
+        else if (absNominal === 150000) jenisPotongan = 'Investasi Jaminan Kerja B';
+        else if (absNominal === 175000) jenisPotongan = 'Investasi Jaminan Kerja C';
+        else if (absNominal === 200000) jenisPotongan = 'Investasi Jaminan Kerja D';
+        else if (absNominal === 250000) jenisPotongan = 'Investasi Jaminan Kerja E';
+      }
 
       return {
         no: row[0] || (index + 1),
         bulanTahun: row[1] || '',
         karyawan: (row[2] || '').trim(),
-        nominal: Math.abs(nominalVal),
+        nominal: absNominal,
+        isNegative: isNegative,
         nik: (row[4] || '').trim(),
-        keterangan: (row[5] || 'Tabungan').trim(),
-        jenisPotongan: 'Investasi'
+        keterangan: rawKet,
+        jenisPotongan: jenisPotongan // Ini yang dibaca oleh app.js (d.jenis)
       };
-    });
+    }).filter(d => d.karyawan && d.nominal > 0);
 
-    // Filter data kosong
-    const filtered = data.filter(d => d.karyawan && d.nominal > 0);
-
-    res.status(200).json({
-      success: true,
-      count: filtered.length,
-      header,
-      data: filtered,
-    });
+    return res.status(200).json({ success: true, count: data.length, data });
 
   } catch (error) {
-    console.error('Google Sheets API Error Details:', {
-      message: error.message,
-      stack: error.stack,
-      data: error.response ? error.response.data : 'No response data'
-    });
-    res.status(500).json({
+    console.error('BACKEND ERROR:', error);
+    return res.status(500).json({
       success: false,
-      error: 'Gagal memproses data Google Sheets',
-      detail: error.message,
-      apiError: error.response ? error.response.data : null
+      error: 'Backend Crash',
+      message: error.message,
+      detail: error.response ? error.response.data : null
     });
   }
 };

@@ -157,7 +157,11 @@ async function fetchData() {
   try {
     const r = await fetch(API_URL);
     const json = await r.json();
-    if (!json.success) throw new Error(json.error || 'API error');
+    if (!json.success) {
+      const msg = json.message || json.error || 'API error';
+      const detail = json.detail ? ` - ${JSON.stringify(json.detail)}` : '';
+      throw new Error(msg + detail);
+    }
 
     // Fetch Review Logs
     try {
@@ -183,23 +187,7 @@ async function fetchData() {
       };
     }).filter(x => x && x.name);
 
-    // Normalisasi Nama berdasarkan NIK (Merge Data)
-    const nikToCanonicalName = {};
-    // First pass: build map of NIK to a canonical name (we pick the longest name as it's usually the full name)
-    allData.forEach(d => {
-      if (d.nik && d.nik !== '-') {
-        if (!nikToCanonicalName[d.nik] || d.name.length > nikToCanonicalName[d.nik].length) {
-          nikToCanonicalName[d.nik] = d.name;
-        }
-      }
-    });
-    // Second pass: apply canonical name
-    allData.forEach(d => {
-      if (d.nik && d.nik !== '-' && nikToCanonicalName[d.nik]) {
-        d.name = nikToCanonicalName[d.nik];
-      }
-    });
-
+    // Normalisasi Nama dihapus agar semua variasi nama muncul di daftar
     allData.sort((a, b) => (a.date || 0) - (b.date || 0));
     globalFilteredData = [...allData];
     document.getElementById('loadingOverlay').classList.add('hidden');
@@ -220,8 +208,14 @@ async function fetchData() {
     initDashboard();
   } catch (e) {
     console.error(e);
-    document.getElementById('loadingOverlay').innerHTML = '<i class="fas fa-exclamation-triangle" style="font-size:3rem;color:#ef4444;margin-bottom:16px"></i><p>Gagal memuat data. Periksa koneksi atau konfigurasi API.</p><p style="font-size:.8rem;margin-top:8px;color:#94a3b8">' + e.message + '</p>';
-    toast('Gagal memuat data: ' + e.message, 'error');
+    let errorText = e.message;
+    // If it's a JSON error from backend, it might be in the message already or we need to parse it
+    document.getElementById('loadingOverlay').innerHTML = `
+      <i class="fas fa-exclamation-triangle" style="font-size:3rem;color:#ef4444;margin-bottom:16px"></i>
+      <p>Gagal memuat data. Periksa koneksi atau konfigurasi API.</p>
+      <p style="font-size:.8rem;margin-top:8px;color:#94a3b8">${errorText}</p>
+    `;
+    toast('Gagal memuat data: ' + errorText, 'error');
   }
 }
 
@@ -297,10 +291,27 @@ function initDashboard(isFirst = true) {
 // ===== SUMMARY CARDS =====
 function renderSummary() {
   const emps = {}; let totalIn = 0, totalOut = 0;
-  const now = new Date();
-  const cm = now.getMonth(), cy = now.getFullYear();
+  
+  // Deteksi bulan terakhir berdasarkan filter yang aktif
+  const filteredWithDates = globalFilteredData.filter(d => d.date);
+  if (filteredWithDates.length === 0) return;
+  
+  // Prioritas mencari bulan dari transaksi 'Setoran' (Tabungan)
+  const setoranDates = filteredWithDates.filter(d => d.type === 'Tabungan').map(d => d.date);
+  let latestDate;
+  if (setoranDates.length > 0) {
+    latestDate = new Date(Math.max(...setoranDates));
+  } else {
+    // Jika tidak ada setoran di filter tsb, gunakan tanggal terakhir apapun yang ada
+    latestDate = new Date(Math.max(...filteredWithDates.map(d => d.date)));
+  }
+  
+  const cm = latestDate.getMonth(), cy = latestDate.getFullYear();
+  const currentMonthLabel = `${monthNames[cm]} ${cy}`;
+  
   let lm = cm - 1, ly = cy;
   if (lm < 0) { lm = 11; ly--; }
+  const lastMonthLabel = `${monthNames[lm]} ${ly}`;
 
   let monthIn = 0, monthOut = 0;
   let lastMonthIn = 0, lastMonthOut = 0;
@@ -352,9 +363,9 @@ function renderSummary() {
 
   const cards = [
     { icon: 'fas fa-wallet', cls: 'blue', label: 'Total Saldo Saat Ini', value: fmt(total), sub: `${getFlowGrowthHtml(total, total - netFlow)} <span style="margin-left:4px; font-size:0.75rem;">(MoM)</span>` },
-    { icon: 'fas fa-arrow-down', cls: 'green', label: 'Setoran Bulan Ini', value: fmt(monthIn), sub: `${getGrowthHtml(monthIn, lastMonthIn)} vs bln lalu` },
-    { icon: 'fas fa-arrow-up', cls: 'red', label: 'Penarikan Bulan Ini', value: fmt(monthOut), sub: `${getGrowthHtml(monthOut, lastMonthOut)} vs bln lalu` },
-    { icon: 'fas fa-exchange-alt', cls: 'cyan', label: 'Arus Kas (Net)', value: fmt(netFlow), sub: `<span class="${netFlowCls}" style="font-weight:600;"><i class="fas ${netFlowIcon}"></i> ${netFlow >= 0 ? 'Surplus' : 'Defisit (Uang Keluar > Masuk)'}</span>` },
+    { icon: 'fas fa-arrow-down', cls: 'green', label: `Setoran (${currentMonthLabel})`, value: fmt(monthIn), sub: `${getGrowthHtml(monthIn, lastMonthIn)} vs bln lalu` },
+    { icon: 'fas fa-arrow-up', cls: 'red', label: `Penarikan (${currentMonthLabel})`, value: fmt(monthOut), sub: `${getGrowthHtml(monthOut, lastMonthOut)} vs bln lalu` },
+    { icon: 'fas fa-exchange-alt', cls: 'cyan', label: `Arus Kas (${currentMonthLabel})`, value: fmt(netFlow), sub: `<span class="${netFlowCls}" style="font-weight:600;"><i class="fas ${netFlowIcon}"></i> ${netFlow >= 0 ? 'Surplus' : 'Defisit'}</span>` },
     { icon: 'fas fa-users', cls: 'purple', label: 'Karyawan Aktif', value: empCount, sub: 'Menabung dlm 1 thn terakhir' },
     { icon: 'fas fa-exclamation-triangle', cls: 'orange', label: 'Anomali Perlu Review', value: allAnomalies.filter(a => a.status === 'In Progress').length, sub: 'Segera Verifikasi' },
     { icon: 'fas fa-percentage', cls: 'yellow', label: 'Bunga Efektif (p.a)', value: (INTEREST_RATE * 100) + '%', sub: 'Pertahun, bunga majemuk' }
@@ -513,13 +524,18 @@ function renderMiniInsights() {
   const content = document.getElementById('miniInsightsContent');
   if (!content) return;
 
-  const now = new Date();
-  const m0 = now.getMonth();
-  const y0 = now.getFullYear();
-  let m3 = m0 - 3, y3 = y0;
-  if (m3 < 0) { m3 += 12; y3--; }
+  const dataWithDates = globalFilteredData.filter(d => d.date);
+  if (dataWithDates.length === 0) return;
+  
+  const latestDate = new Date(Math.max(...dataWithDates.map(d => d.date)));
+  const cm = latestDate.getMonth(), cy = latestDate.getFullYear();
+  
+  let pm = cm - 1, py = cy;
+  if (pm < 0) { pm = 11; py--; }
 
-  let balanceNow = 0, balance3mAgo = 0, totalWithdrawnThisMonth = 0;
+  let currentMonthIn = 0, currentMonthOut = 0;
+  let prevMonthIn = 0, prevMonthOut = 0;
+  let totalIn = 0, totalOut = 0;
   const emps = {};
 
   globalFilteredData.forEach(d => {
@@ -1026,6 +1042,31 @@ function getFilteredTx() {
 
 function renderTxTable() {
   const data = getFilteredTx(); const total = data.length; const pages = Math.ceil(total / txPerPage) || 1;
+  
+  // Hitung ringkasan uang masuk/keluar dari data yang terfilter
+  let totalIn = 0, totalOut = 0;
+  data.forEach(d => {
+    if (d.type === 'Tabungan') totalIn += d.nominal;
+    else totalOut += d.nominal;
+  });
+
+  // Tampilkan ringkasan di atas tabel
+  const summaryEl = document.getElementById('txTableSummary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+        <div class="summary-mini-card" style="flex: 1; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 12px;">
+          <div style="font-size: 0.75rem; color: #15803d; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Total Uang Masuk</div>
+          <div style="font-size: 1.25rem; font-weight: 700; color: #166534;">${fmt(totalIn)}</div>
+        </div>
+        <div class="summary-mini-card" style="flex: 1; background: #fef2f2; border: 1px solid #fecaca; padding: 15px; border-radius: 12px;">
+          <div style="font-size: 0.75rem; color: #b91c1c; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Total Uang Keluar</div>
+          <div style="font-size: 1.25rem; font-weight: 700; color: #991b1b;">${fmt(totalOut)}</div>
+        </div>
+      </div>
+    `;
+  }
+
   if (txPage > pages) txPage = pages;
   const start = (txPage - 1) * txPerPage; const slice = data.slice(start, start + txPerPage);
   document.querySelector('#txTable tbody').innerHTML = slice.map((d, i) => {
@@ -1112,8 +1153,24 @@ function initSearch() {
 }
 
 function showEmployee(name) {
-  document.getElementById('employeeListContainer').classList.add('hidden');
-  document.getElementById('employeeDetail').classList.remove('hidden');
+  const detail = document.getElementById('employeeDetail');
+  const list = document.getElementById('employeeListContainer');
+  if (!detail || !list) return;
+
+  // Temukan NIK dari karyawan yang dipilih
+  const selectedEmp = allEmployees.find(e => e.name === name);
+  const nik = selectedEmp ? selectedEmp.nik : '-';
+
+  // Ambil data: Jika ada NIK, ambil semua yang NIK-nya sama. Jika tidak, ambil berdasarkan nama.
+  let allTxs = [];
+  if (nik && nik !== '-') {
+    allTxs = allData.filter(d => d.nik === nik);
+  } else {
+    allTxs = allData.filter(d => d.name === name);
+  }
+
+  list.classList.add('hidden');
+  detail.classList.remove('hidden');
 
   const inputStart = document.getElementById('globalStartDate');
   const inputEnd = document.getElementById('globalEndDate');
@@ -1122,7 +1179,6 @@ function showEmployee(name) {
   if (startDate) startDate.setHours(0, 0, 0, 0);
   if (endDate) endDate.setHours(23, 59, 59, 999);
 
-  const allTxs = allData.filter(d => d.name === name);
   let totalIn = 0, totalOut = 0;
   let lifeIn = 0, lifeOut = 0;
   
@@ -1396,11 +1452,11 @@ function initAnalytics() {
   if (!container) return;
 
   // 1. DATA PREP (Monthly & All Time)
-  const monthly = {}; 
-  globalFilteredData.forEach(d => { 
-    if (!d.date) return; 
-    const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0'); 
-    if (!monthly[k]) monthly[k] = { in: 0, out: 0, txCount: 0, users: new Set() }; 
+  const monthly = {};
+  allData.forEach(d => {
+    if (!d.date) return;
+    const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0');
+    if (!monthly[k]) monthly[k] = { in: 0, out: 0, txCount: 0, users: new Set() };
     if (d.type === 'Tabungan') monthly[k].in += d.nominal;
     else monthly[k].out += d.nominal;
     monthly[k].txCount++;
@@ -1408,6 +1464,7 @@ function initAnalytics() {
   });
   
   const keys = Object.keys(monthly).sort();
+  // Gunakan bulan terakhir yang tersedia di data
   const currentMonthKey = keys[keys.length - 1];
   const lastMonthKey = keys[keys.length - 2];
   
