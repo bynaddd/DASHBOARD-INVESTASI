@@ -80,18 +80,32 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Pembersihan Private Key yang lebih kuat (untuk Vercel)
-    const cleanKey = key
-      .replace(/\\n/g, '\n') // Ubah literal \n jadi newline asli
-      .replace(/"/g, '')     // Hapus tanda kutip jika terbawa
-      .trim();
+    // SUPER ROBUST Pembersihan Private Key (untuk Vercel)
+    let cleanKey = key;
+    
+    // 1. Jika terbungkus tanda kutip (sering terjadi saat copy-paste), bersihkan
+    if (cleanKey.startsWith('"') && cleanKey.endsWith('"')) {
+      cleanKey = cleanKey.substring(1, cleanKey.length - 1);
+    }
+
+    // 2. Tangani karakter \n literal menjadi baris baru asli
+    cleanKey = cleanKey.replace(/\\n/g, '\n');
+
+    // 3. Pastikan tidak ada spasi di awal/akhir kunci
+    cleanKey = cleanKey.trim();
+
+    // 4. Fallback jika masih gagal (beberapa sistem menambahkan extra backslashes)
+    if (!cleanKey.includes('\n') && cleanKey.includes('-----BEGIN PRIVATE KEY-----')) {
+       // Jika kunci terbaca satu baris tanpa newline, ini pasti salah. 
+       // Kita coba pisahkan manual atau beri peringatan.
+    }
 
     // Validasi format kunci sederhana
     if (!cleanKey.startsWith('-----BEGIN PRIVATE KEY-----')) {
        return res.status(500).json({ 
          success: false, 
          error: 'Invalid Private Key format', 
-         detail: 'Key must start with -----BEGIN PRIVATE KEY-----' 
+         detail: 'Key must start with -----BEGIN PRIVATE KEY-----. Current start: ' + cleanKey.substring(0, 20)
        });
     }
 
