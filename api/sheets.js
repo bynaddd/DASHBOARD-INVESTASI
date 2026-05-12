@@ -20,6 +20,10 @@ module.exports = async (req, res) => {
     let adminEmail = process.env.ADMIN_EMAIL;
     let adminPass = process.env.ADMIN_PASSWORD;
 
+    // DIAGNOSTIC LOG (Akan muncul di Vercel Logs)
+    const availableEnvKeys = Object.keys(process.env).filter(k => k.startsWith('GOOGLE_') || k.startsWith('ADMIN_'));
+    console.log('Detected Env Keys:', availableEnvKeys);
+
     // Helper to strip quotes if present
     const cleanEnv = (val) => {
       if (!val) return val;
@@ -63,10 +67,16 @@ module.exports = async (req, res) => {
 
     if (!email || !key || !sheetId) {
       console.error('MISSING CONFIG:', { email: !!email, key: !!key, sheetId: !!sheetId });
+      const availableKeys = Object.keys(process.env).filter(k => k.startsWith('GOOGLE_'));
       return res.status(500).json({ 
         success: false, 
         error: 'Missing ENV vars', 
-        detail: { email: !!email, key: !!key, sheetId: !!sheetId } 
+        detail: { 
+          email: !!email, 
+          key: !!key, 
+          sheetId: !!sheetId,
+          detected_google_keys: availableKeys
+        } 
       });
     }
 
