@@ -70,7 +70,20 @@ module.exports = async (req, res) => {
       });
     }
 
-    const cleanKey = key.replace(/\\n/g, '\n').trim();
+    // Pembersihan Private Key yang lebih kuat (untuk Vercel)
+    const cleanKey = key
+      .replace(/\\n/g, '\n') // Ubah literal \n jadi newline asli
+      .replace(/"/g, '')     // Hapus tanda kutip jika terbawa
+      .trim();
+
+    // Validasi format kunci sederhana
+    if (!cleanKey.startsWith('-----BEGIN PRIVATE KEY-----')) {
+       return res.status(500).json({ 
+         success: false, 
+         error: 'Invalid Private Key format', 
+         detail: 'Key must start with -----BEGIN PRIVATE KEY-----' 
+       });
+    }
 
     // Handle GET for Reviews or Sheets
     if (req.method === 'GET') {
