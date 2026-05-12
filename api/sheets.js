@@ -20,50 +20,50 @@ module.exports = async (req, res) => {
     let adminEmail = process.env.ADMIN_EMAIL;
     let adminPass = process.env.ADMIN_PASSWORD;
 
-    // DIAGNOSTIC LOG (Akan muncul di Vercel Logs)
-    const availableEnvKeys = Object.keys(process.env).filter(k => k.startsWith('GOOGLE_') || k.startsWith('ADMIN_'));
-    console.log('Detected Env Keys:', availableEnvKeys);
-
-    // Helper to strip quotes if present
-    const cleanEnv = (val) => {
+    // Helper to strip quotes and handle newlines
+    const cleanValue = (val) => {
       if (!val) return val;
       val = val.trim();
       if (val.startsWith('"') && val.endsWith('"')) {
         val = val.substring(1, val.length - 1);
       }
-      return val;
+      return val.replace(/\\n/g, '\n');
     };
 
-    email = cleanEnv(email);
-    key = cleanEnv(key);
-    sheetId = cleanEnv(sheetId);
-    adminEmail = cleanEnv(adminEmail);
-    adminPass = cleanEnv(adminPass);
-
     // Fallback for local development if process.env is not populated
-    if (!email || !key || !sheetId || !adminEmail || !adminPass) {
-      try {
-        const envPath = path.join(process.cwd(), '.env.local');
-        if (fs.existsSync(envPath)) {
-          const envContent = fs.readFileSync(envPath, 'utf8');
-          envContent.split('\n').forEach(line => {
-            const m = line.match(/^([^=]+)=(.*)$/);
-            if (m) {
-              const k = m[1].trim();
-              let v = m[2].trim();
-              if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
-              if (k === 'GOOGLE_SERVICE_ACCOUNT_EMAIL') email = email || v;
-              if (k === 'GOOGLE_PRIVATE_KEY') key = key || v;
-              if (k === 'GOOGLE_SHEET_ID') sheetId = sheetId || v;
-              if (k === 'ADMIN_EMAIL') adminEmail = adminEmail || v;
-              if (k === 'ADMIN_PASSWORD') adminPass = adminPass || v;
-            }
-          });
+    if (!email || !key || !sheetId) {
+      const envFiles = ['.env.local', '.env'];
+      for (const file of envFiles) {
+        try {
+          const envPath = path.join(process.cwd(), file);
+          if (fs.existsSync(envPath)) {
+            const envContent = fs.readFileSync(envPath, 'utf8');
+            envContent.split(/\r?\n/).forEach(line => {
+              const m = line.match(/^([^=]+)=(.*)$/);
+              if (m) {
+                const k = m[1].trim();
+                const v = m[2].trim();
+                if (k === 'GOOGLE_SERVICE_ACCOUNT_EMAIL') email = email || v;
+                if (k === 'GOOGLE_PRIVATE_KEY') key = key || v;
+                if (k === 'GOOGLE_SHEET_ID') sheetId = sheetId || v;
+                if (k === 'ADMIN_EMAIL') adminEmail = adminEmail || v;
+                if (k === 'ADMIN_PASSWORD') adminPass = adminPass || v;
+              }
+            });
+            if (email && key && sheetId) break; // Stop if we found everything
+          }
+        } catch (err) {
+          console.error(`Failed to load ${file}:`, err.message);
         }
-      } catch (err) {
-        console.error('Fallback env load failed:', err.message);
       }
     }
+
+    email = cleanValue(email);
+    key = cleanValue(key);
+    sheetId = cleanValue(sheetId);
+    adminEmail = cleanValue(adminEmail);
+    adminPass = cleanValue(adminPass);
+
 
     if (!email || !key || !sheetId) {
       console.error('MISSING CONFIG:', { email: !!email, key: !!key, sheetId: !!sheetId });

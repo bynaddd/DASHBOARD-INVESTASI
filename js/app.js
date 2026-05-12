@@ -118,6 +118,7 @@ function initLogin() {
 // ===== UTILITAS =====
 const fmt = n => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const getEmpId = d => (d.nik && d.nik !== '-' && d.nik !== '') ? d.nik : d.name;
 
 function parseDateStr(s) {
   if (!s) return null;
@@ -193,15 +194,20 @@ async function fetchData() {
     document.getElementById('loadingOverlay').classList.add('hidden');
     toast('Data berhasil dimuat! (' + allData.length + ' transaksi)', 'success');
     
-    // Populate All Employees List for Search
-    const seen = new Set();
-    allEmployees = [];
+    // Populate All Employees List for Search - Group by ID (NIK or Name)
+    const empMap = {};
     allData.forEach(d => {
-      if (d.name && !seen.has(d.name)) {
-        seen.add(d.name);
-        allEmployees.push({ name: d.name, nik: d.nik || '' });
+      const id = getEmpId(d);
+      if (!empMap[id]) {
+        empMap[id] = { name: d.name, nik: d.nik || '' };
+      } else {
+        // Jika sudah ada, update nama jika nama saat ini lebih panjang (asumsi nama lebih lengkap)
+        if (d.name.length > empMap[id].name.length) {
+          empMap[id].name = d.name;
+        }
       }
     });
+    allEmployees = Object.values(empMap);
     allEmployees.sort((a, b) => a.name.localeCompare(b.name));
 
     initGlobalFilter();
@@ -317,18 +323,19 @@ function renderSummary() {
   let lastMonthIn = 0, lastMonthOut = 0;
 
   globalFilteredData.forEach(d => {
-    if (!emps[d.name]) emps[d.name] = 0;
+    const id = getEmpId(d);
+    if (!emps[id]) emps[id] = 0;
     const isThisMonth = d.date && d.date.getMonth() === cm && d.date.getFullYear() === cy;
     const isLastMonth = d.date && d.date.getMonth() === lm && d.date.getFullYear() === ly;
 
     if (d.type === 'Tabungan') {
       totalIn += d.nominal;
-      emps[d.name] += d.nominal;
+      emps[id] += d.nominal;
       if (isThisMonth) monthIn += d.nominal;
       if (isLastMonth) lastMonthIn += d.nominal;
     } else {
       totalOut += d.nominal;
-      emps[d.name] -= d.nominal;
+      emps[id] -= d.nominal;
       if (isThisMonth) monthOut += d.nominal;
       if (isLastMonth) lastMonthOut += d.nominal;
     }
@@ -338,7 +345,7 @@ function renderSummary() {
   
   const oneYearAgo = new Date();
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const activeEmpsList = new Set(allData.filter(d => d.type === 'Tabungan' && d.date && d.date >= oneYearAgo).map(d => d.name));
+  const activeEmpsList = new Set(allData.filter(d => d.type === 'Tabungan' && d.date && d.date >= oneYearAgo).map(d => getEmpId(d)));
   const empCount = activeEmpsList.size;
 
   const netFlow = monthIn - monthOut;
@@ -553,8 +560,9 @@ function renderMiniInsights() {
       }
     }
 
-    if (!emps[d.name]) emps[d.name] = 0;
-    emps[d.name] += d.type === 'Tabungan' ? d.nominal : -d.nominal;
+    const id = getEmpId(d);
+    if (!emps[id]) emps[id] = 0;
+    emps[id] += d.type === 'Tabungan' ? d.nominal : -d.nominal;
   });
 
   const insights = [];
@@ -589,12 +597,16 @@ function renderMiniInsights() {
 
 // ===== TOP INVESTORS =====
 function renderTopInvestors() {
-  const emps = {}; globalFilteredData.forEach(d => { if (!emps[d.name]) emps[d.name] = 0; emps[d.name] += d.type === 'Tabungan' ? d.nominal : -d.nominal; });
-  const sorted = Object.entries(emps).sort((a, b) => a[1] - b[1]).filter(a => a[1] > 0);
+  const emps = {}; globalFilteredData.forEach(d => { 
+    const id = getEmpId(d);
+    if (!emps[id]) emps[id] = { balance: 0, name: d.name }; 
+    emps[id].balance += d.type === 'Tabungan' ? d.nominal : -d.nominal; 
+  });
+  const sorted = Object.entries(emps).sort((a, b) => a[1].balance - b[1].balance).filter(a => a[1].balance > 0);
   const top5 = sorted.slice(-5); // Ascending for horizontal bar
 
-  const totalBalance = sorted.reduce((a, b) => a + b[1], 0);
-  const top5Total = top5.reduce((a, b) => a + b[1], 0);
+  const totalBalance = sorted.reduce((a, b) => a + b[1].balance, 0);
+  const top5Total = top5.reduce((a, b) => a + b[1].balance, 0);
   const concentration = totalBalance > 0 ? (top5Total / totalBalance * 100) : 0;
 
   let riskColor = '#10b981'; // healthy
@@ -612,10 +624,10 @@ function renderTopInvestors() {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: 'rgba(15, 23, 42, 0.9)', textStyle: { color: '#fff', fontFamily: 'Inter' }, formatter: (p) => `<div style="font-weight:600;margin-bottom:4px">${p[0].name}</div><div>${p[0].marker} ${fmt(p[0].value)}</div>` },
     grid: { top: 40, right: 40, bottom: 20, left: 100 },
     xAxis: { type: 'value', show: false },
-    yAxis: { type: 'category', data: top5.map(s => s[0].length > 15 ? s[0].substring(0, 15) + '…' : s[0]), axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#475569', fontFamily: 'Inter', fontSize: 11 } },
+    yAxis: { type: 'category', data: top5.map(s => s[1].name.length > 15 ? s[1].name.substring(0, 15) + '…' : s[1].name), axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#475569', fontFamily: 'Inter', fontSize: 11 } },
     series: [{
       type: 'bar',
-      data: top5.map((s, i) => ({ value: s[1], itemStyle: { color: bgColors[i] } })),
+      data: top5.map((s, i) => ({ value: s[1].balance, itemStyle: { color: bgColors[i] } })),
       itemStyle: { borderRadius: [0, 6, 6, 0] },
       barWidth: 20,
       label: { show: true, position: 'right', formatter: (p) => (p.value / 1e6).toFixed(1) + 'jt', color: '#64748b', fontSize: 10 }
@@ -654,8 +666,9 @@ function calculateAnomalies() {
   const dailyRate = (typeof INTEREST_RATE !== 'undefined' ? INTEREST_RATE : 0.03) / 365;
 
   sortedData.forEach(d => {
-    if (!emps[d.name]) emps[d.name] = { balance: 0, lastDate: null };
-    const acc = emps[d.name];
+    const id = getEmpId(d);
+    if (!emps[id]) emps[id] = { balance: 0, lastDate: null };
+    const acc = emps[id];
 
     if (acc.lastDate && d.date > acc.lastDate) {
       const daysPassed = Math.floor((d.date - acc.lastDate) / (1000 * 60 * 60 * 24));
@@ -672,13 +685,15 @@ function calculateAnomalies() {
       
       if (balanceAfter < -10000) {
         // Generate Unique Key for tracking review status
-        const txKey = `anomali_${d.name}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
+        const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
         
         // Find latest review for this transaction
         const review = [...allReviews].reverse().find(r => r.txKey === txKey);
 
         allAnomalies.push({
           txKey: txKey,
+          empId: id,
+          nik: d.nik || '',
           originalNo: d.no,
           date: d.date,
           dateStr: d.dateStr || fmtDate(d.date),
@@ -805,7 +820,7 @@ function renderAnomaliTable() {
           <td style="font-size: 0.8rem; color: #64748b;">${a.reviewer}</td>
           <td style="display: flex; gap: 4px;">
             ${reviewBtn}
-            <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${a.name}')"><i class="fas fa-search"></i> Detail</button>
+            <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${a.name}', '${a.nik}')"><i class="fas fa-search"></i> Detail</button>
           </td>
         </tr>
       `;
@@ -935,10 +950,10 @@ async function saveReview() {
 }
 
 
-window.goToEmployee = function(name) {
+window.goToEmployee = function(name, nik = '') {
   const navItem = document.getElementById('nav-karyawan');
   if (navItem) navItem.click();
-  showEmployee(name);
+  showEmployee(name, nik);
 };
 
 // ===== GLOBAL FILTER & EXPORT =====
@@ -1100,15 +1115,7 @@ document.querySelectorAll('#txTable th.sortable').forEach(th => {
 
 // ===== EMPLOYEE SEARCH & LIST =====
 function initSearch() {
-  const empList = [];
-  const seen = new Set();
-  globalFilteredData.forEach(d => {
-    if (d.name && !seen.has(d.name)) {
-      seen.add(d.name);
-      empList.push({ name: d.name, nik: d.nik || '' });
-    }
-  });
-  empList.sort((a, b) => a.name.localeCompare(b.name));
+  const empList = [...allEmployees];
 
   const listContainer = document.getElementById('fullEmployeeList');
 
@@ -1127,7 +1134,7 @@ function initSearch() {
 
     listContainer.querySelectorAll('.emp-list-item').forEach(el => {
       el.addEventListener('click', () => {
-        showEmployee(el.dataset.name);
+        showEmployee(el.dataset.name, el.dataset.nik);
       });
     });
   };
@@ -1152,19 +1159,24 @@ function initSearch() {
   });
 }
 
-function showEmployee(name) {
+function showEmployee(name, nik = '') {
   const detail = document.getElementById('employeeDetail');
   const list = document.getElementById('employeeListContainer');
   if (!detail || !list) return;
 
-  // Temukan NIK dari karyawan yang dipilih
-  const selectedEmp = allEmployees.find(e => e.name === name);
-  const nik = selectedEmp ? selectedEmp.nik : '-';
+  // Prioritas NIK jika ada
+  let searchNik = nik;
+  if (!searchNik || searchNik === '-') {
+    const selectedEmp = allEmployees.find(e => e.name === name);
+    if (selectedEmp && selectedEmp.nik && selectedEmp.nik !== '-') {
+      searchNik = selectedEmp.nik;
+    }
+  }
 
   // Ambil data: Jika ada NIK, ambil semua yang NIK-nya sama. Jika tidak, ambil berdasarkan nama.
   let allTxs = [];
-  if (nik && nik !== '-') {
-    allTxs = allData.filter(d => d.nik === nik);
+  if (searchNik && searchNik !== '-') {
+    allTxs = allData.filter(d => d.nik === searchNik);
   } else {
     allTxs = allData.filter(d => d.name === name);
   }
