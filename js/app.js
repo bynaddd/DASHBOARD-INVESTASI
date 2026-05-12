@@ -1,6 +1,6 @@
 const API_URL = '/api/sheets';
 const INTEREST_RATE = 0.03;
-let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false };
+let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false }, globalTotalSaldo = 0;
 let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
 
 // ===== LOGIN LOGIC =====
@@ -306,10 +306,10 @@ function renderSummary() {
   const setoranDates = filteredWithDates.filter(d => d.type === 'Tabungan').map(d => d.date);
   let latestDate;
   if (setoranDates.length > 0) {
-    latestDate = new Date(Math.max(...setoranDates));
+    // Optimasi: Hindari spread operator (...) pada array besar karena bisa crash
+    latestDate = new Date(setoranDates.reduce((max, d) => (d > max ? d : max), setoranDates[0]));
   } else {
-    // Jika tidak ada setoran di filter tsb, gunakan tanggal terakhir apapun yang ada
-    latestDate = new Date(Math.max(...filteredWithDates.map(d => d.date)));
+    latestDate = new Date(filteredWithDates.reduce((max, d) => (d.date > max ? d.date : max), filteredWithDates[0].date));
   }
   
   const cm = latestDate.getMonth(), cy = latestDate.getFullYear();
@@ -341,7 +341,8 @@ function renderSummary() {
     }
   });
 
-  const total = totalIn - totalOut;
+  // Gunakan total yang sudah dihitung di calculateAnomalies (termasuk bunga)
+  const total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
   
   const oneYearAgo = new Date();
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
@@ -374,7 +375,7 @@ function renderSummary() {
     { icon: 'fas fa-arrow-up', cls: 'red', label: `Penarikan (${currentMonthLabel})`, value: fmt(monthOut), sub: `${getGrowthHtml(monthOut, lastMonthOut)} vs bln lalu` },
     { icon: 'fas fa-exchange-alt', cls: 'cyan', label: `Arus Kas (${currentMonthLabel})`, value: fmt(netFlow), sub: `<span class="${netFlowCls}" style="font-weight:600;"><i class="fas ${netFlowIcon}"></i> ${netFlow >= 0 ? 'Surplus' : 'Defisit'}</span>` },
     { icon: 'fas fa-users', cls: 'purple', label: 'Karyawan Aktif', value: empCount, sub: 'Menabung dlm 1 thn terakhir' },
-    { icon: 'fas fa-exclamation-triangle', cls: 'orange', label: 'Anomali Perlu Review', value: allAnomalies.filter(a => a.status === 'In Progress').length, sub: 'Segera Verifikasi' },
+    { icon: 'fas fa-exclamation-triangle', cls: 'orange', label: 'Transaksi Mencurigakan', value: allAnomalies.filter(a => a.status === 'In Progress').length, sub: 'Segera Verifikasi' },
     { icon: 'fas fa-percentage', cls: 'yellow', label: 'Bunga Efektif (p.a)', value: (INTEREST_RATE * 100) + '%', sub: 'Pertahun, bunga majemuk' }
   ];
   document.getElementById('summaryCards').innerHTML = cards.map(c => `<div class="summary-card"><div class="card-icon ${c.cls}"><i class="${c.icon}"></i></div><div class="card-label">${c.label}</div><div class="card-value">${c.value}</div><div class="card-sub" style="margin-top:4px;">${c.sub}</div></div>`).join('');
@@ -534,7 +535,7 @@ function renderMiniInsights() {
   const dataWithDates = globalFilteredData.filter(d => d.date);
   if (dataWithDates.length === 0) return;
   
-  const latestDate = new Date(Math.max(...dataWithDates.map(d => d.date)));
+  const latestDate = new Date(dataWithDates.reduce((max, d) => (d.date > max ? d.date : max), dataWithDates[0].date));
   const cm = latestDate.getMonth(), cy = latestDate.getFullYear();
   
   let pm = cm - 1, py = cy;
@@ -660,9 +661,19 @@ function renderRecentTable() {
 
 // ===== ANOMALI LOGIC =====
 function calculateAnomalies() {
-  const sortedData = [...allData].filter(d => d.date).sort((a, b) => a.date - b.date);
+  // Gunakan allData yang sudah di-sort di fetchData untuk hemat memori & waktu
+  const sortedData = allData.filter(d => d.date);
   const emps = {};
   allAnomalies = [];
+  
+  // Optimasi: Gunakan Map untuk review agar pencarian O(1) bukannya O(N)
+  const reviewMap = {};
+  if (allReviews && allReviews.length > 0) {
+    allReviews.forEach(r => {
+      reviewMap[r.txKey] = r;
+    });
+  }
+
   const dailyRate = (typeof INTEREST_RATE !== 'undefined' ? INTEREST_RATE : 0.03) / 365;
 
   sortedData.forEach(d => {
@@ -670,52 +681,89 @@ function calculateAnomalies() {
     if (!emps[id]) emps[id] = { balance: 0, lastDate: null };
     const acc = emps[id];
 
-    if (acc.lastDate && d.date > acc.lastDate) {
-      const daysPassed = Math.floor((d.date - acc.lastDate) / (1000 * 60 * 60 * 24));
-      if (daysPassed > 0 && acc.balance > 0) {
-        acc.balance = acc.balance * Math.pow(1 + dailyRate, daysPassed);
-      }
-    }
-
-    if (d.type === 'Tabungan') {
-      acc.balance += d.nominal;
-    } else {
-      const balanceBefore = Math.round(acc.balance);
-      const balanceAfter = Math.round(acc.balance - d.nominal);
-      
-      if (balanceAfter < -10000) {
-        // Generate Unique Key for tracking review status
-        const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
+      // Rumus Perusahaan (Ordinary Annuity): Bunga dihitung dari saldo bulan sebelumnya
+      const r = INTEREST_RATE / 12;
+      if (acc.lastDate && d.date) {
+        const m1 = acc.lastDate.getFullYear() * 12 + acc.lastDate.getMonth();
+        const m2 = d.date.getFullYear() * 12 + d.date.getMonth();
+        const n = m2 - m1;
         
-        // Find latest review for this transaction
-        const review = [...allReviews].reverse().find(r => r.txKey === txKey);
-
-        allAnomalies.push({
-          txKey: txKey,
-          empId: id,
-          nik: d.nik || '',
-          originalNo: d.no,
-          date: d.date,
-          dateStr: d.dateStr || fmtDate(d.date),
-          name: d.name,
-          nominal: d.nominal,
-          balanceBefore: balanceBefore,
-          balanceAfter: balanceAfter,
-          reason: 'Saldo defisit > 10rb',
-          status: review ? review.status : 'In Progress',
-          notes: review ? review.notes : '-',
-          reviewer: review ? (review.reviewer || '-') : '-',
-          reviewTime: review ? review.timestamp : null,
-          correctName: review ? review.correctName : '',
-          correctNik: review ? review.correctNik : '',
-          keterangan: d.keterangan || '-',
-          jenis: d.jenis || 'Penarikan'
-        });
+        if (n > 0 && acc.balance > 0) {
+          // Saldo lama berbunga selama n bulan
+          const oldBal = acc.balance;
+          acc.balance = acc.balance * Math.pow(1 + r, n);
+        }
       }
-      acc.balance -= d.nominal;
-    }
-    acc.lastDate = d.date;
+
+      if (d.type === 'Tabungan') {
+        acc.balance += d.nominal;
+      } else {
+        const balanceBefore = Math.round(acc.balance);
+        const balanceAfter = Math.round(acc.balance - d.nominal);
+        
+        if (balanceAfter < -10000) {
+          const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
+          const review = reviewMap[txKey];
+
+          allAnomalies.push({
+            txKey: txKey,
+            empId: id,
+            nik: d.nik || '',
+            originalNo: d.no,
+            date: d.date,
+            dateStr: d.dateStr || fmtDate(d.date),
+            name: d.name,
+            nominal: d.nominal,
+            balanceBefore: balanceBefore,
+            balanceAfter: balanceAfter,
+            reason: 'Saldo defisit > 10rb',
+            status: review ? review.status : 'In Progress',
+            notes: review ? review.notes : '-',
+            reviewer: review ? (review.reviewer || '-') : '-',
+            reviewTime: review ? review.timestamp : null,
+            correctName: review ? review.correctName : '',
+            correctNik: review ? review.correctNik : '',
+            keterangan: d.keterangan || '-',
+            jenis: d.jenis || 'Penarikan'
+          });
+        }
+        acc.balance -= d.nominal;
+      }
+      acc.lastDate = d.date;
   });
+
+  // Hitung Total Dana Investasi Global (Sesuai Bunga Majemuk)
+  globalTotalSaldo = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
+
+  // Sync anomalies to Google Sheets if admin
+  if (currentUser && currentUser.role === 'admin' && allAnomalies.length > 0) {
+    syncAnomaliesToSheet(allAnomalies);
+  }
+}
+
+async function syncAnomaliesToSheet(anomalies) {
+  try {
+    await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'syncAnomalies',
+        anomalies: anomalies.map(a => ({
+          tanggal: a.dateStr,
+          karyawan: a.name,
+          nominal: a.nominal,
+          saldoSebelum: a.balanceBefore,
+          saldoSesudah: a.balanceAfter,
+          alasan: a.reason,
+          status: a.status,
+          notes: a.notes,
+          reviewer: a.reviewer
+        }))
+      })
+    });
+  } catch (e) {
+    console.warn('Gagal sinkronisasi transaksi mencurigakan:', e);
+  }
 }
 
 function renderAnomaliTable() {
@@ -753,6 +801,7 @@ function renderAnomaliTable() {
     const countKoreksi = allAnomalies.filter(a => a.status === 'Salah Orang').length;
     
     sumContainer.innerHTML = `
+      <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-triangle"></i></div><div class="card-label">TRANSAKSI MENCURIGAKAN</div><div class="card-value">${totalAnomali}</div><div class="card-sub">Segera Verifikasi</div></div>
       <div class="summary-card"><div class="card-icon orange"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">Potensi Kerugian</div><div class="card-value" style="color: #f59e0b;">${fmt(potensiKerugian)}</div><div class="card-sub">Status: Masih Progres</div></div>
       <div class="summary-card"><div class="card-icon red"><i class="fas fa-times-circle"></i></div><div class="card-label">Kerugian Terbukti</div><div class="card-value" style="color: #ef4444;">${fmt(kerugianTerbukti)}</div><div class="card-sub">Total Defisit Terkonfirmasi</div></div>
       <div class="summary-card"><div class="card-icon blue"><i class="fas fa-check-double"></i></div><div class="card-label">Transaksi Terbukti</div><div class="card-value">${countVerified}</div><div class="card-sub">Telah diverifikasi salah</div></div>
@@ -1229,33 +1278,31 @@ function showEmployee(name, nik = '') {
         }
       });
 
-      while (currentDate <= today) {
-        const dStr = currentDate.getFullYear() + '-' + currentDate.getMonth() + '-' + currentDate.getDate();
-        if (txsByDay[dStr]) {
-          currentBalance += txsByDay[dStr];
-          currentPrincipal += txsByDay[dStr];
-        }
+      const lastTxDate = sortedTxs[sortedTxs.length - 1].date;
 
+      // Optimasi: Gunakan loop bulanan (Ordinary Annuity Logic)
+      while (currentDate.getFullYear() < lastTxDate.getFullYear() || 
+            (currentDate.getFullYear() === lastTxDate.getFullYear() && currentDate.getMonth() <= lastTxDate.getMonth())) {
+        // 1. Bunga dihitung dari saldo awal bulan (sebelum setoran bulan ini)
         if (currentBalance > 0) {
-          const interestToday = currentBalance * dailyRate;
-          currentBalance += interestToday;
-          exactBunga += interestToday;
+          const mInterest = currentBalance * (INTEREST_RATE / 12);
+          currentBalance += mInterest;
+          exactBunga += mInterest;
         }
 
-        const tomorrow = new Date(currentDate);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (tomorrow.getMonth() !== currentDate.getMonth() || tomorrow > today) {
-          let pass = true;
-          if (startDate && currentDate < startDate) pass = false;
-          if (endDate && currentDate > endDate) pass = false;
-          
-          if (pass || (!startDate && !endDate)) {
-            labels.push(monthNames[currentDate.getMonth()] + ' ' + currentDate.getFullYear());
-            balanceData.push(Math.round(currentBalance));
-            principalData.push(Math.round(currentPrincipal));
+        // 2. Tambahkan semua transaksi di bulan ini (baru akan berbunga bulan depan)
+        sortedTxs.forEach(tx => {
+          if (tx.date.getFullYear() === currentDate.getFullYear() && tx.date.getMonth() === currentDate.getMonth()) {
+            currentBalance += (tx.type === 'Tabungan' ? tx.nominal : -tx.nominal);
+            currentPrincipal += (tx.type === 'Tabungan' ? tx.nominal : -tx.nominal);
           }
-        }
-        currentDate.setDate(currentDate.getDate() + 1);
+        });
+
+        labels.push(monthNames[currentDate.getMonth()] + ' ' + currentDate.getFullYear());
+        balanceData.push(Math.round(currentBalance));
+        principalData.push(Math.round(currentPrincipal));
+
+        currentDate.setMonth(currentDate.getMonth() + 1);
       }
     }
   }
@@ -1387,21 +1434,22 @@ function showEmployee(name, nik = '') {
     }]
   });
 
-  // FORECAST CHART
+  // FORECAST CHART - Menggunakan Rumus: P * ((A-1)/r)
   let forecastLabels = [];
   let forecastData = [];
   if (principal > 0) {
-    let simBalance = saldo;
-    const simMonthlyContribution = avgContribution > 0 ? avgContribution : 0;
-    const monthlyRate = INTEREST_RATE / 12;
+    const P = avgContribution > 0 ? avgContribution : 0;
+    const r = INTEREST_RATE / 12;
 
-    for (let m = 1; m <= 60; m++) {
-      simBalance += simMonthlyContribution;
-      simBalance += simBalance * monthlyRate;
+    for (let n = 1; n <= 60; n++) {
+      const A = Math.pow(1 + r, n);
+      const fvAnnuity = P * (A - 1) / r;
+      const currentGrowth = saldo * Math.pow(1 + r, n);
+      const total = currentGrowth + fvAnnuity;
 
-      if (m % 12 === 0) {
-        forecastLabels.push(`Tahun ke-${m / 12}`);
-        forecastData.push(Math.round(simBalance));
+      if (n % 12 === 0) {
+        forecastLabels.push(`Tahun ke-${n / 12}`);
+        forecastData.push(Math.round(total));
       }
     }
   }
@@ -1422,15 +1470,37 @@ function showEmployee(name, nik = '') {
     });
   }
 
-  // Transaction table with running balance
+  // Transaction table with running balance including interest
   const sortedTable = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
   let tableRunBal = 0;
+  let tableRunInterest = 0;
+  let lastDateForTable = null;
   const tableRows = [];
+
   sortedTable.forEach(d => {
+    // 1. Rumus Perusahaan (Ordinary Annuity): Bunga dari saldo sebelumnya
+    const r = INTEREST_RATE / 12;
+    if (lastDateForTable && d.date) {
+      const m1 = lastDateForTable.getFullYear() * 12 + lastDateForTable.getMonth();
+      const m2 = d.date.getFullYear() * 12 + d.date.getMonth();
+      const n = m2 - m1;
+      
+      if (n > 0 && tableRunBal > 0) {
+        const oldBal = tableRunBal;
+        // A = (1+r)^n
+        const A = Math.pow(1 + r, n);
+        tableRunBal = tableRunBal * A;
+        tableRunInterest += (tableRunBal - oldBal);
+      }
+    }
+
+    // 2. Update saldo dengan transaksi saat ini
     if (d.type === 'Tabungan') tableRunBal += d.nominal;
     else tableRunBal -= d.nominal;
 
-    // Filter for display
+    lastDateForTable = d.date;
+
+    // Filter untuk tampilan
     let pass = true;
     if (startDate && d.date) pass = pass && d.date >= startDate;
     if (endDate && d.date) pass = pass && d.date <= endDate;
@@ -1444,7 +1514,8 @@ function showEmployee(name, nik = '') {
       <td>${d.jenis}${linkBtn}</td>
       <td style="font-weight:600">${fmt(d.nominal)}</td>
       <td><span class="badge ${d.type === 'Tabungan' ? 'in' : 'out'}">${d.type}</span></td>
-      <td style="font-weight:700; color:#334155;">${fmt(tableRunBal)}</td>
+      <td style="color:#f59e0b; font-weight:600;">${fmt(Math.round(tableRunInterest))}</td>
+      <td style="font-weight:700; color:#334155;">${fmt(Math.round(tableRunBal))}</td>
       </tr>`);
     }
   });

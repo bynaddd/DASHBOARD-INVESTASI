@@ -219,7 +219,51 @@ module.exports = async (req, res) => {
         return res.status(200).json({ success: true });
       }
 
-      // 4. Batch Upload
+      // 4. Sync Anomalies to "transaksi mencurigakan" sheet
+      if (type === 'syncAnomalies' && Array.isArray(anomalies)) {
+        const sheetName = "transaksi mencurigakan";
+        const headers = ["Tanggal", "Karyawan", "Nominal", "Saldo Sebelum", "Saldo Sesudah", "Alasan", "Status", "Notes", "Reviewer"];
+        const rows = anomalies.map(a => [
+          a.tanggal, a.karyawan, a.nominal, a.saldoSebelum, a.saldoSesudah, a.alasan, a.status, a.notes, a.reviewer
+        ]);
+
+        try {
+          // Check if sheet exists and clear it, or create it
+          const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
+          const sheet = meta.data.sheets.find(s => s.properties.title === sheetName);
+          
+          if (!sheet) {
+            await sheets.spreadsheets.batchUpdate({
+              spreadsheetId: sheetId.trim(),
+              requestBody: {
+                requests: [{ addSheet: { properties: { title: sheetName } } }]
+              }
+            });
+          } else {
+            // Clear existing content
+            await sheets.spreadsheets.values.clear({
+              spreadsheetId: sheetId.trim(),
+              range: `'${sheetName}'!A:I`,
+            });
+          }
+
+          // Write new content (including headers)
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: sheetId.trim(),
+            range: `'${sheetName}'!A1`,
+            valueInputOption: 'RAW',
+            requestBody: {
+              values: [headers, ...rows]
+            },
+          });
+          return res.status(200).json({ success: true });
+        } catch (e) {
+          console.error('Gagal sync anomalies:', e);
+          return res.status(500).json({ success: false, error: e.message });
+        }
+      }
+
+      // 5. Batch Upload
       if (uploadData && Array.isArray(uploadData)) {
         const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
         const sheetName = meta.data.sheets[0].properties.title;
