@@ -204,19 +204,100 @@ module.exports = async (req, res) => {
 
       // 3. Update Specific Row
       if (type === 'updateRow' && updateData) {
-        const { rowNo, name, nik } = updateData;
-        const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
-        const sheetName = meta.data.sheets[0].properties.title;
+        const { rowNo, date, name, nominal, nik, type: txType, notes } = updateData;
+        console.log('--- START UPDATE ROW ---');
         
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: sheetId.trim(),
-          range: `'${sheetName}'!C${rowNo + 3}:E${rowNo + 3}`,
-          valueInputOption: 'RAW',
-          requestBody: {
-            values: [[name, "", nik]]
+        // Verifikasi Password Admin lagi untuk keamanan
+        if (inputPass !== adminPass) {
+          return res.status(401).json({ success: false, error: 'Password Konfirmasi salah!' });
+        }
+        
+        try {
+          const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
+          const allSheetNames = meta.data.sheets.map(s => s.properties.title);
+          console.log('Available Sheets:', allSheetNames);
+
+          // Find the data sheet (try common names first)
+          let targetSheet = meta.data.sheets.find(s => {
+            const t = s.properties.title.toLowerCase();
+            return t.includes('transaksi') || t.includes('data') || t.includes('investasi');
+          });
+
+          // Fallback: Use the first sheet that isn't a log sheet
+          if (!targetSheet) {
+            targetSheet = meta.data.sheets.find(s => {
+              const t = s.properties.title;
+              return t !== 'EditLog' && t !== 'ReviewLog' && t !== 'transaksi mencurigakan';
+            }) || meta.data.sheets[0];
           }
-        });
-        return res.status(200).json({ success: true });
+          
+          const sheetName = targetSheet.properties.title;
+          const saveNominal = txType === 'Penarikan' ? -Math.abs(nominal) : Math.abs(nominal);
+          
+          console.log(`Updating Sheet: "${sheetName}" at Row: ${rowNo}`);
+
+          // A. Update Main Sheet
+          // Prefix date with ' to force it as text and prevent Google Sheets auto-formatting
+          const forcedDate = `'${date}`;
+          const updateRes = await sheets.spreadsheets.values.update({
+            spreadsheetId: sheetId.trim(),
+            range: `'${sheetName}'!B${rowNo}:H${rowNo}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+              values: [[forcedDate, name, saveNominal, nik, txType, "DIEDIT", notes || "-"]]
+            }
+          });
+
+          // B. Log to "EditLog" (Silent catch to prevent main update failure)
+          try {
+            const timestamp = new Date().toLocaleString('id-ID');
+            const logRow = [timestamp, rowNo, date, name, nominal, nik, txType, adminEmail, notes || "-"];
+            
+            // Check if EditLog exists
+            if (!allSheetNames.includes('EditLog')) {
+              await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: sheetId.trim(),
+                requestBody: {
+                  requests: [{ addSheet: { properties: { title: 'EditLog' } } }]
+                }
+              });
+              await sheets.spreadsheets.values.update({
+                spreadsheetId: sheetId.trim(),
+                range: 'EditLog!A1:I1',
+                valueInputOption: 'RAW',
+                requestBody: { values: [["Timestamp", "RowNo", "Tanggal", "Nama", "Nominal", "NIK", "Tipe", "Editor", "Catatan"]] }
+              });
+            }
+
+            await sheets.spreadsheets.values.append({
+              spreadsheetId: sheetId.trim(),
+              range: 'EditLog!A:I',
+              valueInputOption: 'USER_ENTERED',
+              insertDataOption: 'INSERT_ROWS',
+              requestBody: { values: [logRow] }
+            });
+          } catch (logErr) {
+            console.warn('Failed to log edit:', logErr.message);
+          }
+
+          return res.status(200).json({ 
+            success: true, 
+            debug: {
+              spreadsheetTitle: meta.data.properties.title,
+              targetSheet: sheetName,
+              row: rowNo,
+              allSheets: allSheetNames,
+              updatedRange: updateRes.data.updatedRange
+            }
+          });
+        } catch (err) {
+          console.error('CRITICAL UPDATE ERROR:', err);
+          return res.status(500).json({ 
+            success: false, 
+            error: err.message,
+            stack: err.stack
+          });
+        }
       }
 
       // 4. Sync Anomalies to "transaksi mencurigakan" sheet
@@ -292,7 +373,7 @@ module.exports = async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId.trim(),
-      range: `'${sheetName}'!A:F`,
+      range: `'${sheetName}'!A:G`,
     });
 
     const allRows = response.data.values || [];
@@ -301,11 +382,14 @@ module.exports = async (req, res) => {
     const headerIndex = allRows.findIndex(r => r.includes('Karyawan') || r.includes('KARYAWAN'));
     const rows = headerIndex > -1 ? allRows.slice(headerIndex + 1) : allRows;
 
-    const data = rows.map((row, index) => {
+    const data = [];
+    allRows.forEach((row, index) => {
+      // Skip header and rows before it
+      if (index <= headerIndex) return;
+
       let rawNominal = (row[3] || '0').toString().trim();
       let isNegative = false;
       
-      // Handle accounting negative format: (1.234,00)
       if (rawNominal.startsWith('(') && rawNominal.endsWith(')')) {
         isNegative = true;
         rawNominal = rawNominal.substring(1, rawNominal.length - 1);
@@ -318,7 +402,6 @@ module.exports = async (req, res) => {
       const absNominal = Math.abs(nominal);
       const rawKet = (row[5] || (isNegative ? 'Penarikan' : 'Tabungan')).trim();
 
-      // Logika Kategorisasi Otomatis berdasarkan nominal (Request User)
       let jenisPotongan = rawKet;
       if (!isNegative) {
         if (absNominal <= 100000) jenisPotongan = 'Investasi Jaminan Kerja A';
@@ -328,17 +411,23 @@ module.exports = async (req, res) => {
         else if (absNominal === 250000) jenisPotongan = 'Investasi Jaminan Kerja E';
       }
 
-      return {
-        no: row[0] || (index + 1),
-        bulanTahun: row[1] || '',
-        karyawan: (row[2] || '').trim(),
-        nominal: absNominal,
-        isNegative: isNegative,
-        nik: (row[4] || '').trim(),
-        keterangan: rawKet,
-        jenisPotongan: jenisPotongan // Ini yang dibaca oleh app.js (d.jenis)
-      };
-    }).filter(d => d.karyawan && d.nominal > 0);
+      const karyawan = (row[2] || '').trim();
+      if (karyawan && absNominal > 0) {
+        data.push({
+          sheetRow: index + 1, // Physical row number (1-based)
+          no: row[0] || (data.length + 1),
+          bulanTahun: row[1] || '',
+          karyawan: karyawan,
+          nominal: absNominal,
+          isNegative: isNegative,
+          nik: (row[4] || '').trim(),
+          keterangan: rawKet,
+          jenisPotongan: jenisPotongan,
+          isEdited: row[6] === 'DIEDIT',
+          notes: row[7] || ''
+        });
+      }
+    });
 
     return res.status(200).json({ success: true, count: data.length, data });
 

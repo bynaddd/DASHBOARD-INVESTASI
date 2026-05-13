@@ -108,23 +108,25 @@
     <button class="menu-toggle" id="menuToggle"><i class="fas fa-bars"></i></button>
     <h1 class="page-title" id="pageTitle">Dashboard</h1>
     <div class="topbar-right" style="display:flex; align-items:center; gap:8px;">
-      <div style="display: flex; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; padding: 0 4px;">
-        <input type="date" id="globalStartDate" title="Mulai Tanggal" style="padding: 6px 4px; border: none; background: transparent; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
-        <span style="color:#94a3b8; font-size: 0.9rem; margin: 0 4px;">-</span>
-        <input type="date" id="globalEndDate" title="Sampai Tanggal" style="padding: 6px 4px; border: none; background: transparent; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
+      <div id="globalFilterContainer" style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; padding: 0 4px;">
+          <input type="date" id="globalStartDate" title="Mulai Tanggal" style="padding: 6px 4px; border: none; background: transparent; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
+          <span style="color:#94a3b8; font-size: 0.9rem; margin: 0 4px;">-</span>
+          <input type="date" id="globalEndDate" title="Sampai Tanggal" style="padding: 6px 4px; border: none; background: transparent; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
+        </div>
+        <select id="globalTypeFilter" style="padding: 6px 8px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
+          <option value="">Semua Tipe</option>
+          <option value="Tabungan">Tabungan</option>
+          <option value="Penarikan">Penarikan</option>
+        </select>
+        <select id="topAnomaliStatusFilter" class="hidden" style="padding: 6px 8px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
+          <option value="">Semua Status</option>
+          <option value="In Progress">Masih Progres</option>
+          <option value="Salah Orang">Koreksi</option>
+          <option value="Verified">Terbukti</option>
+        </select>
+        <button id="btnApplyFilter" class="btn btn-primary" style="padding: 6px 12px; font-size: 0.85rem; height: auto; display: flex; align-items: center; justify-content: center;"><i class="fas fa-search"></i></button>
       </div>
-      <select id="globalTypeFilter" style="padding: 6px 8px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
-        <option value="">Semua Tipe</option>
-        <option value="Tabungan">Tabungan</option>
-        <option value="Penarikan">Penarikan</option>
-      </select>
-      <select id="topAnomaliStatusFilter" class="hidden" style="padding: 6px 8px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-family: Inter; font-size: 0.85rem; color: #475569; outline: none; cursor: pointer;">
-        <option value="">Semua Status</option>
-        <option value="In Progress">Masih Progres</option>
-        <option value="Salah Orang">Koreksi</option>
-        <option value="Verified">Terbukti</option>
-      </select>
-      <button id="btnApplyFilter" class="btn btn-primary" style="padding: 6px 12px; font-size: 0.85rem; height: auto; display: flex; align-items: center; justify-content: center;"><i class="fas fa-search"></i></button>
       <button id="btnExportExcel" class="btn btn-outline" style="padding: 6px 12px; font-size: 0.85rem; height: auto;"><i class="fas fa-file-excel" style="color: #10b981;"></i> Export</button>
       <span class="date-display" id="dateDisplay" style="margin-left:4px; font-size: 0.85rem; display: none;"></span>
       <div id="reviewerEmailContainer" style="display: flex; align-items: center; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0 8px; margin-right: 8px;">
@@ -196,6 +198,9 @@
                 </div>
                 <div class="chart-body" style="flex: 1; padding: 8px 16px 16px; min-height: 0; position: relative; display: flex; justify-content: center; align-items: center;">
                     <div id="dashPieChart" style="width: 100%; height: 100%; min-height: 200px;"></div>
+                    <div style="position: absolute; bottom: 8px; left: 0; right: 0; font-size: 0.7rem; color: #64748b; text-align: center; padding: 0 16px; line-height: 1.2;">
+                        <i class="fas fa-info-circle" style="color: #3b82f6;"></i> Akumulasi Dana: Menunjukkan pembagian antara Modal & Bunga yang masih ada, serta Total Dana yang sudah ditarik.
+                    </div>
                 </div>
             </div>
         </div>
@@ -225,6 +230,7 @@
                         <th>Jenis</th>
                         <th>Nominal</th>
                         <th>Tipe</th>
+                        <th>Aksi</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -255,21 +261,22 @@
       
       <div class="emp-cards" id="empCards"></div>
       <div class="chart-row">
-        <div class="chart-card"><div class="chart-header"><h3><i class="fas fa-magic" style="color: #8b5cf6;"></i> Prediksi Saldo</h3></div>
-          <div class="chart-body"><div id="empForecastChart" style="width:100%; height:300px;"></div></div></div>
+        <div class="chart-card"><div class="chart-header"><h3><i class="fas fa-chart-line"></i> Grafik Pertumbuhan Historis</h3></div>
+          <div class="chart-body"><div id="empChart" style="width:100%; height:300px;"></div></div></div>
         <div class="chart-card"><div class="chart-header"><h3><i class="fas fa-chart-doughnut"></i> Komposisi Modal vs Return</h3></div>
           <div class="chart-body"><div id="empPieChart" style="width:100%; height:300px;"></div></div></div>
-      </div>
-      
-      <!-- Growth Section -->
-      <div class="chart-card full-width" style="margin-bottom: 24px;">
-        <div class="chart-header"><h3><i class="fas fa-chart-line"></i> Grafik Pertumbuhan Historis</h3></div>
-        <div class="chart-body"><div id="empChart" style="width:100%; height:300px;"></div></div>
       </div>
 
       <div class="chart-card full-width"><div class="chart-header"><h3><i class="fas fa-list"></i> Riwayat Transaksi</h3></div>
         <div class="table-wrapper"><table class="data-table" id="empTable"><thead><tr>
-          <th>Tanggal</th><th>Keterangan</th><th>Nominal</th><th>Tipe</th><th>Keuntungan</th><th>Kumulatif (+Bunga)</th>
+          <th class="sortable-emp" data-col="0" style="cursor:pointer">Tanggal <i class="fas fa-sort"></i></th>
+          <th>Nama Record</th>
+          <th>Keterangan</th>
+          <th class="sortable-emp" data-col="2" style="cursor:pointer">Nominal <i class="fas fa-sort"></i></th>
+          <th>Tipe</th>
+          <th class="sortable-emp" data-col="4" style="cursor:pointer">Keuntungan <i class="fas fa-sort"></i></th>
+          <th class="sortable-emp" data-col="5" style="cursor:pointer">Kumulatif (+BUNGA) <i class="fas fa-sort"></i></th>
+          <th>AKSI</th>
         </tr></thead><tbody></tbody></table></div>
       </div>
     </div>
@@ -280,8 +287,9 @@
     <div class="filter-bar">
       <div class="search-box inline"><i class="fas fa-search"></i>
         <input type="text" id="txSearch" placeholder="Cari transaksi..."></div>
+      <select id="txFilterStartMonth"><option value="">Semua Bulan</option></select>
+      <select id="txFilterEndMonth"><option value="">s/d (Opsional)</option></select>
       <select id="txFilterType"><option value="">Semua Tipe</option><option value="Tabungan">Tabungan</option><option value="Penarikan">Penarikan</option></select>
-      <select id="txFilterMonth"><option value="">Semua Bulan</option></select>
     </div>
     <div id="txTableSummary"></div>
     <div class="chart-card full-width"><div class="table-wrapper">
@@ -292,6 +300,7 @@
         <th>Jenis Potongan</th>
         <th class="sortable" data-col="4">Nominal <i class="fas fa-sort"></i></th>
         <th>Tipe</th>
+        <th>Aksi</th>
       </tr></thead><tbody></tbody></table>
     </div>
     <div class="pagination" id="txPagination"></div>
@@ -520,9 +529,10 @@
             <input type="text" id="correctName" class="form-input" style="padding: 8px 12px;" placeholder="Nama Karyawan" autocomplete="off">
             <div id="correctNameResults" class="search-results" style="top: 100%; font-size: 0.9rem;"></div>
           </div>
-          <div>
+          <div style="position: relative;">
             <label for="correctNik" style="font-size: 0.8rem; font-weight: 600; color: #64748b;">NIK/KTP yang Benar:</label>
-            <input type="text" id="correctNik" class="form-input" style="padding: 8px 12px;" placeholder="NIK/KTP">
+            <input type="text" id="correctNik" class="form-input" style="padding: 8px 12px;" placeholder="NIK/KTP" autocomplete="off">
+            <div id="correctNikResults" class="search-results" style="top: 100%; font-size: 0.9rem;"></div>
           </div>
         </div>
       </div>
@@ -534,6 +544,58 @@
     <div class="modal-footer" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 12px;">
       <button class="btn btn-outline" id="btnCancelReview">Batal</button>
       <button class="btn btn-primary" id="btnSaveReview"><i class="fas fa-save"></i> Simpan Status</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: EDIT TRANSAKSI -->
+<div id="modalEditTx" class="modal-overlay hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3><i class="fas fa-edit"></i> Edit Data Transaksi</h3>
+      <button class="btn-close" id="btnCloseEditModal"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editTxRowNo">
+      <div style="display: grid; grid-template-columns: 1fr; gap: 16px;">
+        <div>
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Tanggal (Bulan/Tahun):</label>
+          <input type="text" id="editTxDate" class="form-input" placeholder="Contoh: 15/04/2026">
+        </div>
+        <div style="position: relative;">
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Nama Karyawan:</label>
+          <input type="text" id="editTxName" class="form-input" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+          <div id="editTxNameResults" class="search-results" style="top: 100%; font-size: 0.9rem;"></div>
+        </div>
+        <div>
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Nominal:</label>
+          <input type="number" id="editTxNominal" class="form-input" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+        </div>
+        <div style="position: relative;">
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">NIK:</label>
+          <input type="text" id="editTxNik" class="form-input" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+          <div id="editTxNikResults" class="search-results" style="top: 100%; font-size: 0.9rem;"></div>
+        </div>
+        <div>
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Tipe:</label>
+          <select id="editTxType" class="form-input" disabled style="background-color: #f1f5f9; cursor: not-allowed;">
+            <option value="Tabungan">Tabungan</option>
+            <option value="Penarikan">Penarikan</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Catatan Perubahan:</label>
+          <textarea id="editTxNotes" class="form-input" placeholder="Alasan perubahan data... (opsional)" style="height: 60px; resize: none; background-color: var(--surface);"></textarea>
+        </div>
+        <div>
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Password Konfirmasi:</label>
+          <input type="password" id="editTxPassword" class="form-input" placeholder="Masukkan password admin...">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px; background: #f8fafc;">
+      <button class="btn btn-outline" id="btnCancelEdit">Batal</button>
+      <button class="btn btn-primary" id="btnSaveEdit"><i class="fas fa-save"></i> Simpan Perubahan</button>
     </div>
   </div>
 </div>

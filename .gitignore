@@ -17,3 +17,5 @@ node_modules/
 # Ignore local Vercel metadata
 .vercel
 
+
+.vercel
