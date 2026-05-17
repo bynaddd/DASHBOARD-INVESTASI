@@ -26,7 +26,7 @@ function initBalanceChart() {
         data: {
             labels: dataLabels,
             datasets: [{
-                label: 'Total Saldo',
+                label: 'Modal + Bunga',
                 data: dataValues,
                 borderColor: '#3b82f6', // Soft Blue
                 backgroundColor: gradient,

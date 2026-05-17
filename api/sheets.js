@@ -168,6 +168,11 @@ module.exports = async (req, res) => {
         const { txKey, status, notes, reviewer, correctName, correctNik } = reviewData;
         const timestamp = new Date().toISOString();
         
+        // Security check for mutation
+        if (status === 'Salah Orang' && (!req.body.pass || req.body.pass !== adminPass)) {
+          return res.status(401).json({ success: false, error: 'Password Admin diperlukan untuk koreksi nama!' });
+        }
+        
         try {
           await sheets.spreadsheets.values.append({
             spreadsheetId: sheetId.trim(),
@@ -303,9 +308,9 @@ module.exports = async (req, res) => {
       // 4. Sync Anomalies to "transaksi mencurigakan" sheet
       if (type === 'syncAnomalies' && Array.isArray(anomalies)) {
         const sheetName = "transaksi mencurigakan";
-        const headers = ["Tanggal", "Karyawan", "Nominal", "Saldo Sebelum", "Saldo Sesudah", "Alasan", "Status", "Notes", "Reviewer"];
+        const headers = ["Tanggal", "Karyawan", "Nominal", "Saldo Sebelum", "Selisih", "Alasan", "Status", "Notes", "Reviewer"];
         const rows = anomalies.map(a => [
-          a.tanggal, a.karyawan, a.nominal, a.saldoSebelum, a.saldoSesudah, a.alasan, a.status, a.notes, a.reviewer
+          a.tanggal, a.karyawan, a.nominal, a.saldoSebelum, a.selisih, a.alasan, a.status, a.notes, a.reviewer
         ]);
 
         try {

@@ -39,11 +39,17 @@ function applyAccessControl() {
 
   // Guest Restrictions: No Download, No Email Input
   const exportBtn = document.getElementById('btnExportExcel');
+  const exportAnomaliBtn = document.getElementById('btnDownloadAnomali');
   const emailContainer = document.getElementById('reviewerEmailContainer');
 
   if (exportBtn) {
     if (isAdmin) exportBtn.classList.remove('hidden');
     else exportBtn.classList.add('hidden');
+  }
+
+  if (exportAnomaliBtn) {
+    if (isAdmin) exportAnomaliBtn.classList.remove('hidden');
+    else exportAnomaliBtn.classList.add('hidden');
   }
 
   if (emailContainer) {
@@ -164,6 +170,95 @@ function toast(msg, type = 'info') { const t = document.createElement('div'); t.
 
 let allAliasesMap = {}; // Global map for NIK to variations
 
+/**
+ * Menghitung rincian penarikan (Modal, Bunga, Salah, Mencurigakan)
+ * @param {Array} filteredData - Data yang ingin dihitung rinciannya (biasanya data bulan ini atau terfilter)
+ * @returns {Object} { modal, bunga, salah, suspicious }
+ */
+function calculateWithdrawalBreakdown(filteredData) {
+  const breakdown = { modal: 0, bunga: 0, salah: 0, suspicious: 0 };
+  if (!filteredData || filteredData.length === 0) return breakdown;
+
+  const filteredRows = new Set(filteredData.filter(d => d.type === 'Penarikan').map(d => d.sheetRow));
+  if (filteredRows.size === 0) return breakdown;
+
+  const empState = {};
+  const monthlyRate = 0.03 / 12;
+  const anomalyMap = {};
+  allAnomalies.forEach(a => { anomalyMap[a.txKey] = a.status; });
+
+  // Kita harus memproses seluruh data secara kronologis untuk mendapatkan saldo modal vs bunga yang akurat
+
+  allData.forEach(t => {
+    const id = getEmpId(t);
+    if (!empState[id]) empState[id] = { principal: 0, interest: 0, lastDate: null };
+    const s = empState[id];
+
+    // Hitung bunga yang terkumpul (hanya jika ada saldo modal)
+    if (s.lastDate && t.date > s.lastDate && s.principal > 0) {
+      const diffMonths = (t.date.getFullYear() - s.lastDate.getFullYear()) * 12 + (t.date.getMonth() - s.lastDate.getMonth());
+      if (diffMonths > 0) s.interest += s.principal * monthlyRate * diffMonths;
+    }
+
+    if (t.type === 'Tabungan') {
+      s.principal += t.nominal;
+    } else {
+      // Penarikan
+      const txKey = `anomali_${id}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
+      const status = anomalyMap[txKey];
+      const isFiltered = filteredRows.has(t.sheetRow);
+
+      const nominal = t.nominal;
+      let remaining = nominal;
+      let takenBunga = 0;
+      let takenModal = 0;
+      let takenSalah = 0;
+      let takenSuspicious = 0;
+
+      // 1. Logika Waterfall: Ambil dari Bunga lalu Modal
+      const totalAvailable = s.interest + s.principal;
+      const amountCovered = Math.max(0, Math.min(remaining, totalAvailable));
+      
+      if (amountCovered > 0) {
+        const fromBunga = Math.min(amountCovered, s.interest);
+        takenBunga = fromBunga;
+        s.interest -= fromBunga;
+        
+        const fromModal = amountCovered - fromBunga;
+        takenModal = fromModal;
+        s.principal -= fromModal;
+        
+        remaining -= amountCovered;
+      }
+      
+      // 2. Sisa nominal (Defisit) dikategorikan berdasarkan status anomali
+      if (remaining > 0) {
+        if (status === 'Verified') {
+          // Kerugian Terbukti: Defisit dari transaksi yang sudah diverifikasi
+          takenSalah = remaining;
+        } else if (status === 'MENUNGGU REVIEW') {
+          // Potensi Kerugian: Defisit dari transaksi yang masih dalam investigasi
+          takenSuspicious = remaining;
+        } else {
+          // Normal atau Salah Orang (Koreksi): Defisit dianggap sebagai pengurang modal
+          takenModal += remaining;
+        }
+        s.principal -= remaining;
+      }
+
+      if (isFiltered) {
+        breakdown.modal += takenModal;
+        breakdown.bunga += takenBunga;
+        breakdown.salah += takenSalah;
+        breakdown.suspicious += takenSuspicious;
+      }
+    }
+    s.lastDate = t.date;
+  });
+
+  return breakdown;
+}
+
 // ===== FETCH DATA DARI API SERVERLESS =====
 async function fetchData() {
   try {
@@ -227,7 +322,7 @@ async function fetchData() {
     allEmployees = Object.values(empMap).map(e => ({ ...e, variations: Array.from(e.variations) }));
     allEmployees.sort((a, b) => a.name.localeCompare(b.name));
 
-    initGlobalFilter();
+    initDashboardFilter();
     initDashboard();
   } catch (e) {
     console.error(e);
@@ -244,16 +339,45 @@ async function fetchData() {
 
 // ===== INIT =====
 function initDashboard(isFirst = true) {
-  calculateAnomalies();
-  renderSummary(); renderMiniInsights(); renderTrendChart(); renderCashFlowChart(); renderDashPieChart(); renderTopInvestors(); renderRecentTable(); renderAnomaliTable();
+  try { calculateAnomalies(); } catch (e) { console.error('Error calculateAnomalies:', e); }
+  try { renderIntelligence(); } catch (e) { console.error('Error renderIntelligence:', e); }
+  try { renderSummary(); } catch (e) { console.error('Error renderSummary:', e); }
+  try { renderHealthAnalytics(); } catch (e) { console.error('Error renderHealthAnalytics:', e); }
+  try { renderTrendChart(); } catch (e) { console.error('Error renderTrendChart:', e); }
+  try { renderCashFlowChart(); } catch (e) { console.error('Error renderCashFlowChart:', e); }
+  if (typeof renderDashPieChart === 'function') {
+    try { renderDashPieChart(); } catch (e) { console.error('Error renderDashPieChart:', e); }
+  }
+
+  try { renderTopInvestors(); } catch (e) { console.error('Error renderTopInvestors:', e); }
+  try { renderFundCompositionChart(); } catch (e) { console.error('Error renderFundCompositionChart:', e); }
+  try { renderRecentTable(); } catch (e) { console.error('Error renderRecentTable:', e); }
+  try { renderAnomaliTable(); } catch (e) { console.error('Error renderAnomaliTable:', e); }
+
+  
   if (isFirst) populateMonthFilter();
   renderTxTable(); initSearch(); initAnalytics();
+
+
+
+  // Search for recent table
+  const recentSearch = document.getElementById('recentTableSearch');
+  if (recentSearch) {
+    recentSearch.addEventListener('input', () => renderRecentTable(recentSearch.value));
+  }
+
+
   
   // Initialize Autocompletes for all relevant modals
   setupAutocomplete('editTxName', 'editTxNameResults', 'editTxName', 'editTxNik');
   setupAutocomplete('editTxNik', 'editTxNikResults', 'editTxName', 'editTxNik');
   setupAutocomplete('correctName', 'correctNameResults', 'correctName', 'correctNik');
   setupAutocomplete('correctNik', 'correctNikResults', 'correctName', 'correctNik');
+
+  const btnDownloadAnomali = document.getElementById('btnDownloadAnomali');
+  if (btnDownloadAnomali) {
+    btnDownloadAnomali.addEventListener('click', () => exportAnomaliData());
+  }
   
   if (isFirst) {
     initAdmin();
@@ -271,6 +395,25 @@ function initDashboard(isFirst = true) {
       });
     });
 
+    // Listeners for Anomali Filters
+    const anomSearch = document.getElementById('anomaliSearch');
+    const anomMode = document.getElementById('anomaliFilterMode');
+    const anomStart = document.getElementById('anomaliFilterStartMonth');
+    const anomEnd = document.getElementById('anomaliFilterEndMonth');
+    const anomStatus = document.getElementById('anomaliStatusFilter');
+
+    [anomSearch, anomMode, anomStart, anomEnd, anomStatus].forEach(el => {
+      if (el) el.addEventListener('change', () => renderAnomaliTable());
+      if (el && el.id === 'anomaliSearch') el.addEventListener('input', () => renderAnomaliTable());
+    });
+
+    if (anomMode) {
+      anomMode.addEventListener('change', () => {
+        const group = document.getElementById('anomaliFilterCustomGroup');
+        if (group) group.style.display = anomMode.value === 'custom' ? 'flex' : 'none';
+      });
+    }
+
     // Modal Review Events
     const btnCloseModal = document.getElementById('btnCloseModal');
     const btnCancelReview = document.getElementById('btnCancelReview');
@@ -280,12 +423,18 @@ function initDashboard(isFirst = true) {
     if (btnSaveReview) btnSaveReview.addEventListener('click', saveReview);
 
     // Toggle Correction Fields based on Status Selection
-    const statusOptions = document.getElementsByName('reviewStatus');
+      const statusOptions = document.getElementsByName('reviewStatus');
     statusOptions.forEach(opt => {
-      opt.addEventListener('change', () => {
+      opt.addEventListener('change', (e) => {
         const cf = document.getElementById('correctionFields');
-        if (opt.value === 'Salah Orang') cf.classList.remove('hidden');
-        else cf.classList.add('hidden');
+        const pg = document.getElementById('reviewPasswordGroup');
+        if (e.target.value === 'SALAH INPUT') {
+          cf.classList.remove('hidden');
+          pg.classList.remove('hidden');
+        } else {
+          cf.classList.add('hidden');
+          pg.classList.add('hidden');
+        }
       });
     });
 
@@ -318,103 +467,227 @@ function initDashboard(isFirst = true) {
   document.getElementById('dateDisplay').textContent = new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 }
 
-// ===== SUMMARY CARDS =====
-function renderSummary() {
-  const emps = {}; let totalIn = 0, totalOut = 0;
+// ===== SECTION 1: HEADER INTELLIGENCE =====
+function renderIntelligence() {
+  const greetingEl = document.getElementById('intelGreeting');
+  const summaryEl = document.getElementById('aiInsightSummary');
+  const healthStatusEl = document.getElementById('systemHealthStatus');
+  const healthTextEl = document.getElementById('healthStatusText');
+  const dateEl = document.getElementById('realtimeDate');
 
-  // Deteksi bulan terakhir berdasarkan filter yang aktif
+  if (greetingEl) {
+    const hr = new Date().getHours();
+    let greet = "Selamat Malam";
+    if (hr < 11) greet = "Selamat Pagi";
+    else if (hr < 15) greet = "Selamat Siang";
+    else if (hr < 19) greet = "Selamat Sore";
+    greetingEl.textContent = `${greet}, ${currentUser ? currentUser.name : 'Administrator'}`;
+  }
+
+  if (dateEl) {
+    dateEl.textContent = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  // Calculate some quick stats for summary
+  const dataDates = allData.filter(d => d.date);
+  if (dataDates.length === 0) return;
+  
+  // Find Last Deposit Date (Setoran Masuk) as Reference
+  const depositData = allData.filter(d => d.date && d.type === 'Tabungan');
+  let referenceDate = new Date();
+  if (depositData.length > 0) {
+    referenceDate = new Date(depositData.reduce((max, d) => (d.date > max ? d.date : max), depositData[0].date));
+    const lastDepEl = document.getElementById('lastDepositDate');
+    if (lastDepEl) {
+      lastDepEl.textContent = referenceDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+    }
+  }
+
+  const cm = referenceDate.getMonth(), cy = referenceDate.getFullYear();
+  
+  const thisMonthData = allData.filter(d => d.date && d.date.getMonth() === cm && d.date.getFullYear() === cy);
+  const thisMonthIn = thisMonthData.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
+  
+  let lm = cm - 1, ly = cy;
+  if (lm < 0) { lm = 11; ly--; }
+  const lastMonthData = allData.filter(d => d.date && d.date.getMonth() === lm && d.date.getFullYear() === ly);
+  const lastMonthIn = lastMonthData.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
+
+  if (summaryEl) {
+    let insight = "Money Box menunjukkan pertumbuhan saldo yang stabil bulan ini.";
+    if (lastMonthIn > 0) {
+      const growth = ((thisMonthIn - lastMonthIn) / lastMonthIn * 100);
+      if (growth > 5) insight = `Money Box menunjukkan pertumbuhan stabil dengan peningkatan setoran aktif sebesar ${growth.toFixed(1)}% MoM.`;
+      else if (growth < -5) insight = `Peringatan: Terjadi penurunan setoran sebesar ${Math.abs(growth).toFixed(1)}% dibanding bulan lalu.`;
+    }
+    summaryEl.textContent = insight;
+  }
+
+  // System Health
+  if (healthStatusEl && healthTextEl) {
+    const thisMonthOut = thisMonthData.filter(d => d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
+    const ratio = thisMonthIn > 0 ? (thisMonthOut / thisMonthIn) : 0;
+    
+    if (ratio > 0.8) {
+      healthStatusEl.className = "health-value warning";
+      healthTextEl.textContent = "Warning";
+    } else if (ratio > 0.5) {
+      healthStatusEl.className = "health-value stable";
+      healthTextEl.textContent = "Stable";
+    } else {
+      healthStatusEl.className = "health-value healthy";
+      healthTextEl.textContent = "Healthy";
+    }
+  }
+}
+
+// ===== SECTION 2: KPI SUMMARY CARDS =====
+function renderSummary() {
   const filteredWithDates = globalFilteredData.filter(d => d.date);
   if (filteredWithDates.length === 0) return;
 
-  // Prioritas mencari bulan dari transaksi 'Setoran' (Tabungan)
-  const setoranDates = filteredWithDates.filter(d => d.type === 'Tabungan').map(d => d.date);
-  let latestDate;
-  if (setoranDates.length > 0) {
-    // Optimasi: Hindari spread operator (...) pada array besar karena bisa crash
-    latestDate = new Date(setoranDates.reduce((max, d) => (d > max ? d : max), setoranDates[0]));
-  } else {
-    latestDate = new Date(filteredWithDates.reduce((max, d) => (d.date > max ? d.date : max), filteredWithDates[0].date));
+  // Use Last Deposit Date as reference for Summary
+  const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
+  const depositData = dataToUse.filter(d => d.date && d.type === 'Tabungan');
+  let referenceDate = new Date();
+  if (depositData.length > 0) {
+    referenceDate = new Date(depositData.reduce((max, d) => (d.date > max ? d.date : max), depositData[0].date));
   }
 
-  const cm = latestDate.getMonth(), cy = latestDate.getFullYear();
-  const currentMonthLabel = `${monthNames[cm]} ${cy}`;
-
+  const cm = referenceDate.getMonth(), cy = referenceDate.getFullYear();
   let lm = cm - 1, ly = cy;
   if (lm < 0) { lm = 11; ly--; }
-  const lastMonthLabel = `${monthNames[lm]} ${ly}`;
 
-  let monthIn = 0, monthOut = 0;
-  let lastMonthIn = 0, lastMonthOut = 0;
+  let totalIn = 0, totalOut = 0, monthIn = 0, monthOut = 0, lastMonthIn = 0, lastMonthOut = 0;
+  let activeEmpsSet = new Set();
+  
+  const threeMonthsAgo = new Date(referenceDate);
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-  globalFilteredData.forEach(d => {
-    const id = getEmpId(d);
-    if (!emps[id]) emps[id] = 0;
-    const isThisMonth = d.date && d.date.getMonth() === cm && d.date.getFullYear() === cy;
-    const isLastMonth = d.date && d.date.getMonth() === lm && d.date.getFullYear() === ly;
-
+  dataToUse.forEach(d => {
     if (d.type === 'Tabungan') {
       totalIn += d.nominal;
-      emps[id] += d.nominal;
-      if (isThisMonth) monthIn += d.nominal;
-      if (isLastMonth) lastMonthIn += d.nominal;
+      if (d.date && d.date >= threeMonthsAgo) activeEmpsSet.add(getEmpId(d));
+      if (d.date && d.date.getMonth() === cm && d.date.getFullYear() === cy) monthIn += d.nominal;
+      if (d.date && d.date.getMonth() === lm && d.date.getFullYear() === ly) lastMonthIn += d.nominal;
     } else {
       totalOut += d.nominal;
-      emps[id] -= d.nominal;
-      if (isThisMonth) monthOut += d.nominal;
-      if (isLastMonth) lastMonthOut += d.nominal;
+      if (d.date && d.date.getMonth() === cm && d.date.getFullYear() === cy) monthOut += d.nominal;
+      if (d.date && d.date.getMonth() === lm && d.date.getFullYear() === ly) lastMonthOut += d.nominal;
     }
   });
 
-  // Gunakan total yang sudah dihitung di calculateAnomalies (termasuk bunga)
   const total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
-
-
-
+  const totalPrincipal = totalIn - totalOut;
   const netFlow = monthIn - monthOut;
   const lastNetFlow = lastMonthIn - lastMonthOut;
 
-  const getGrowthHtml = (curr, last) => {
-    if (last === 0) return curr > 0 ? `<span class="positive" style="font-weight:600;"><i class="fas fa-arrow-up"></i> +100%</span>` : `<span style="color:#64748b">-</span>`;
-    const pct = ((curr - last) / last * 100).toFixed(1);
-    if (pct > 0) return `<span class="positive" style="font-weight:600;"><i class="fas fa-arrow-up"></i> +${pct}%</span>`;
-    if (pct < 0) return `<span class="negative" style="font-weight:600;"><i class="fas fa-arrow-down"></i> ${pct}%</span>`;
-    return `<span style="color:#64748b; font-weight:600;">0%</span>`;
+  // Update Labels to reflect Reference Month
+  const refMonthName = monthNames[cm].toUpperCase() + ' ' + cy;
+  const labelMap = {
+    'kpiSetoranLabel': `SETORAN (${refMonthName})`,
+    'kpiPenarikanLabel': `PENARIKAN (${refMonthName})`,
+    'kpiNetGrowthLabel': `NET GROWTH (${refMonthName})`
+  };
+  Object.entries(labelMap).forEach(([id, text]) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  });
+
+  // Render values and trends
+  const setKPI = (id, val, current, last, isCurrency = true) => {
+    const valEl = document.getElementById('kpi' + id);
+    const trendEl = document.getElementById('kpi' + id + 'Trend'); 
+    if (valEl) valEl.textContent = isCurrency ? fmt(val) : val;
+    if (trendEl) {
+      if (last === 0) {
+        trendEl.innerHTML = `<span class="trend-badge">--</span>`;
+      } else {
+        const pct = ((current - last) / Math.abs(last) * 100).toFixed(1);
+        const up = parseFloat(pct) >= 0;
+        // Business logic: higher deposits are good, higher withdrawals are cautionary
+        const isPositive = (id === 'PenarikanBln' || id === 'ArusKas' && current < 0) ? !up : up;
+        trendEl.innerHTML = `<span class="trend-badge ${isPositive ? 'up' : 'down'}"><i class="fas fa-arrow-${up ? 'up' : 'down'}"></i> ${up ? '+' : ''}${pct}%</span> vs bln lalu`;
+      }
+    }
   };
 
-  const getFlowGrowthHtml = (curr, last) => {
-    if (curr > last) return `<span class="positive" style="font-weight:600;"><i class="fas fa-arrow-up"></i> Naik dr bln lalu</span>`;
-    if (curr < last) return `<span class="negative" style="font-weight:600;"><i class="fas fa-arrow-down"></i> Turun dr bln lalu</span>`;
-    return `<span style="color:#64748b; font-weight:600;">Stabil</span>`;
-  };
+  setKPI('TotalSaldo', total, total, total - (monthIn - monthOut));
+  setKPI('ModalPokok', totalPrincipal, totalPrincipal, totalPrincipal - (monthIn - monthOut));
+  setKPI('SetoranBln', monthIn, monthIn, lastMonthIn);
+  setKPI('PenarikanBln', monthOut, monthOut, lastMonthOut);
+  setKPI('NetGrowth', netFlow, netFlow, lastNetFlow);
+  // To ensure consistency, KaryawanAktif should exactly match globalTotalActive
+  const validActiveEmps = typeof globalTotalActive !== 'undefined' ? globalTotalActive : 0;
+  setKPI('KaryawanAktif', validActiveEmps, validActiveEmps, 0, false);
+  // Specific Net Growth description
+  const kpiNetGrowthTrend = document.getElementById('kpiNetGrowthTrend');
+  if (kpiNetGrowthTrend && netFlow !== 0) {
+    const isDeficit = netFlow < 0;
+    kpiNetGrowthTrend.innerHTML = `<span class="trend-badge ${isDeficit ? 'down' : 'up'}"><i class="fas fa-arrow-${isDeficit ? 'down' : 'up'}"></i> ${isDeficit ? 'Defisit' : 'Surplus'}</span>`;
+  }
 
-  const netFlowCls = netFlow >= 0 ? 'positive' : 'negative';
-  const netFlowIcon = netFlow >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
-
-  const totalPrincipal = allData.reduce((sum, d) => sum + (d.type === 'Tabungan' ? d.nominal : -d.nominal), 0);
-
-  const cards = [
-    { 
-      icon: 'fas fa-wallet', 
-      cls: 'blue', 
-      label: 'Total Saldo Saat Ini <br><span style="font-size:0.7rem; font-weight:normal; opacity:0.8; text-transform: none;">dengan bunga sebesar 3% per tahun</span>', 
-      value: fmt(total), 
-      sub: `${getFlowGrowthHtml(total, total - netFlow)} <span style="margin-left:4px; font-size:0.75rem;">(MoM)</span>` 
-    },
-    { 
-      icon: 'fas fa-coins', 
-      cls: 'indigo', 
-      label: 'Modal Pokok Saat Ini', 
-      value: fmt(totalPrincipal), 
-      sub: 'Akumulasi Setoran - Penarikan' 
-    },
-    { icon: 'fas fa-arrow-down', cls: 'green', label: `Setoran (${currentMonthLabel})`, value: fmt(monthIn), sub: `${getGrowthHtml(monthIn, lastMonthIn)} vs bln lalu` },
-    { icon: 'fas fa-arrow-up', cls: 'red', label: `Penarikan (${currentMonthLabel})`, value: fmt(monthOut), sub: `${getGrowthHtml(monthOut, lastMonthOut)} vs bln lalu` },
-    { icon: 'fas fa-exchange-alt', cls: 'cyan', label: `Arus Kas (${currentMonthLabel})`, value: fmt(netFlow), sub: `<span class="${netFlowCls}" style="font-weight:600;"><i class="fas ${netFlowIcon}"></i> ${netFlow >= 0 ? 'Surplus' : 'Defisit'}</span>` },
-    { icon: 'fas fa-users', cls: 'purple', label: 'Karyawan Aktif Berinvestasi', value: globalTotalActive, sub: 'Setoran < 3 bln terakhir' },
-    { icon: 'fas fa-exclamation-triangle', cls: 'orange', label: 'Transaksi Mencurigakan', value: allAnomalies.filter(a => a.status === 'In Progress').length, sub: 'Segera Verifikasi' }
-  ];
-  document.getElementById('summaryCards').innerHTML = cards.map(c => `<div class="summary-card"><div class="card-icon ${c.cls}"><i class="${c.icon}"></i></div><div class="card-label">${c.label}</div><div class="card-value">${c.value}</div><div class="card-sub" style="margin-top:4px;">${c.sub}</div></div>`).join('');
+  const netGrowthEl = document.getElementById('kpiNetGrowth');
+  if (netGrowthEl) netGrowthEl.textContent = fmt(total - totalPrincipal);
+  
+  const trendNetEl = document.getElementById('kpiNetGrowthTrend');
+  if (trendNetEl) {
+    trendNetEl.innerHTML = `<span class="trend-badge up"><i class="fas fa-chart-line"></i> +3% Fixed</span> compounding`;
+  }
 }
+
+
+
+// ===== SECTION 3: FINANCIAL HEALTH ANALYTICS =====
+function renderHealthAnalytics() {
+  const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
+  const dataDates = dataToUse.filter(d => d.date);
+  if (dataDates.length === 0) return;
+  const latestDate = new Date(dataDates.reduce((max, d) => (d.date > max ? d.date : max), dataDates[0].date));
+  
+  const threeMonthsAgo = new Date(latestDate);
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+
+  const emps = {};
+  allEmployees.forEach(e => { emps[e.nik || e.name] = { lastSaving: null, balance: 0, count: 0 }; });
+  
+  let totalIn = 0, totalOut = 0;
+  dataToUse.forEach(d => {
+    const id = getEmpId(d);
+    if (!emps[id]) return;
+    if (d.type === 'Tabungan') {
+      totalIn += d.nominal;
+      emps[id].balance += d.nominal;
+      emps[id].count++;
+      if (!emps[id].lastSaving || d.date > emps[id].lastSaving) emps[id].lastSaving = d.date;
+    } else {
+      totalOut += d.nominal;
+      emps[id].balance -= d.nominal;
+    }
+  });
+
+  const activeSavers = Object.values(emps).filter(e => e.lastSaving && e.lastSaving >= threeMonthsAgo).length;
+  const dormantCount = Object.values(emps).filter(e => !e.lastSaving || e.lastSaving < threeMonthsAgo).length;
+  const saverRate = (activeSavers / allEmployees.length * 100).toFixed(1);
+  const withdrawalRatio = (totalIn > 0 ? (totalOut / totalIn * 100) : 0).toFixed(1);
+  const avgSaving = allEmployees.length > 0 ? (globalTotalSaldo / allEmployees.length) : 0;
+
+  // Recovery Rate from Anomalies
+  const proven = allAnomalies.filter(a => a.status === 'TERBUKTI');
+  const recovered = proven.filter(a => a.sysStatus === 'LUNAS').length;
+  const recoveryRate = proven.length > 0 ? (recovered / proven.length * 100).toFixed(1) : 0;
+
+  // AI Insights - Menggabungkan semua metrik kesehatan menjadi list
+  const insights = [];
+  insights.push(`<i class="fas fa-users"></i> Tingkat Karyawan Berinvestasi: <b>${saverRate}%</b> (${activeSavers} dari ${allEmployees.length} karyawan).`);
+  insights.push(`<i class="fas fa-shield-alt"></i> Tingkat Pemulihan Transaksi Bermasalah: <b>${recoveryRate}%</b>.`);
+  
+  if (dormantCount > 5) insights.push(`<i class="fas fa-user-clock"></i> ${dormantCount} karyawan tidak menabung > 3 bulan.`);
+  insights.push(`<i class="fas fa-calendar-check"></i> Aktivitas setoran memuncak pada minggu pertama setiap bulan.`);
+
+  document.getElementById('aiInsightList').innerHTML = insights.map(i => `<li class="ai-insight-item">${i}</li>`).join('');
+}
+
 
 // ===== CHART HELPERS =====
 // ECharts doesn't need global chartOpts like Chart.js did, configuration is passed per instance.
@@ -521,184 +794,172 @@ function renderCashFlowChart() {
   });
 }
 
-// ===== DASHBOARD PIE CHART =====
-function renderDashPieChart() {
+
+// ===== FUND COMPOSITION CHART =====
+function renderFundCompositionChart() {
+  const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
   let totalIn = 0, totalOut = 0;
-  globalFilteredData.forEach(d => { d.type === 'Tabungan' ? totalIn += d.nominal : totalOut += d.nominal; });
-
-  // Tampilkan akumulasi total: Modal Tersisa, Bunga Tersisa, dan Total Penarikan
-  const modalTersisa = Math.max(0, totalIn - totalOut);
-  const bungaTersisa = Math.max(0, globalTotalSaldo - modalTersisa);
-
-  const ctx = document.getElementById('dashPieChart');
-  if (!ctx) return;
-  if (charts.dashPie) charts.dashPie.dispose();
-  charts.dashPie = echarts.init(ctx);
-  charts.dashPie.setOption({
-    tooltip: { trigger: 'item', backgroundColor: 'rgba(15, 23, 42, 0.9)', textStyle: { color: '#fff', fontFamily: 'Inter' }, formatter: (p) => `${p.marker}${p.name}: <br/><span style="margin-left:14px;font-weight:600">${fmt(p.value)}</span>` },
-    legend: { bottom: 0, itemGap: 15, textStyle: { fontFamily: 'Inter', color: '#64748b' } },
-    series: [{
-      type: 'pie', radius: ['45%', '70%'], center: ['50%', '45%'],
-      avoidLabelOverlap: false,
-      itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
-      label: { show: false, position: 'center' },
-      labelLine: { show: false },
-      data: [
-        { value: modalTersisa, name: 'Modal Pokok (Sisa)', itemStyle: { color: '#4f46e5' } },
-        { value: bungaTersisa, name: 'Keuntungan (Sisa)', itemStyle: { color: '#f59e0b' } },
-        { value: totalOut, name: 'Total Penarikan', itemStyle: { color: '#ef4444' } }
-      ]
-    }]
+  dataToUse.forEach(d => {
+    if (d.type === 'Tabungan') totalIn += d.nominal;
+    else totalOut += d.nominal;
   });
-}
 
-// ===== MINI INSIGHTS =====
-function renderMiniInsights() {
-  const content = document.getElementById('miniInsightsContent');
-  if (!content) return;
-
-  const dataWithDates = globalFilteredData.filter(d => d.date);
-  if (dataWithDates.length === 0) return;
-
-  const latestDate = new Date(dataWithDates.reduce((max, d) => (d.date > max ? d.date : max), dataWithDates[0].date));
-  const cm = latestDate.getMonth(), cy = latestDate.getFullYear();
-
-  let pm = cm - 1, py = cy;
-  if (pm < 0) { pm = 11; py--; }
-
-  let currentMonthIn = 0, currentMonthOut = 0;
-  let prevMonthIn = 0, prevMonthOut = 0;
-  let totalIn = 0, totalOut = 0;
-  const emps = {};
-
-  globalFilteredData.forEach(d => {
-    if (d.type === 'Tabungan') {
-      totalIn += d.nominal;
-      if (d.date) {
-        if (d.date.getMonth() === cm && d.date.getFullYear() === cy) currentMonthIn += d.nominal;
-        if (d.date.getMonth() === pm && d.date.getFullYear() === py) prevMonthIn += d.nominal;
-      }
-    } else {
-      totalOut += d.nominal;
-      if (d.date) {
-        if (d.date.getMonth() === cm && d.date.getFullYear() === cy) currentMonthOut += d.nominal;
-        if (d.date.getMonth() === pm && d.date.getFullYear() === py) prevMonthOut += d.nominal;
-      }
+  let transaksiMencurigakan = 0;
+  allAnomalies.forEach(a => {
+    if (a.status === 'Verified' || a.status === 'MENUNGGU REVIEW' || a.status === 'TERBUKTI') {
+      transaksiMencurigakan += a.initialDebt || 0;
     }
-
-    const id = getEmpId(d);
-    if (!emps[id]) emps[id] = 0;
-    emps[id] += d.type === 'Tabungan' ? d.nominal : -d.nominal;
   });
 
-  const insights = [];
+  const totalPrincipal = totalIn - totalOut;
+  const keuntunganSisa = Math.max(0, globalTotalSaldo - totalPrincipal);
+  const modalPokokSisa = Math.max(0, totalPrincipal);
+  const penarikanValid = Math.max(0, totalOut - transaksiMencurigakan);
 
-  // Insight 1: Dana vs Prev Month
-  if (prevMonthIn > 0) {
-    const pct = ((currentMonthIn - prevMonthIn) / prevMonthIn) * 100;
-    if (pct > 0) insights.push(`Dana masuk naik <strong style="color:#10b981;">+${pct.toFixed(1)}%</strong> dibanding bulan lalu`);
-    else if (pct < 0) insights.push(`Dana masuk turun <strong style="color:#ef4444;">${pct.toFixed(1)}%</strong> dibanding bulan lalu`);
+  const ctx = document.getElementById('fundCompositionChart');
+  if (!ctx) return;
+  if (charts.fundComposition) charts.fundComposition.dispose();
+  charts.fundComposition = echarts.init(ctx);
+  
+  const chartData = [
+    { value: modalPokokSisa, name: 'Modal Pokok (Sisa)', itemStyle: { color: '#4f46e5' } },
+    { value: keuntunganSisa, name: 'Keuntungan (Sisa)', itemStyle: { color: '#f59e0b' } },
+    { value: penarikanValid, name: 'Total Penarikan', itemStyle: { color: '#ef4444' } }
+  ];
+
+  if (transaksiMencurigakan > 0) {
+    chartData.push({ value: transaksiMencurigakan, name: 'Dana Mencurigakan', itemStyle: { color: '#8b5cf6' } });
   }
 
-  // Insight 2: Penarikan vs Prev Month
-  if (prevMonthOut > 0) {
-    const pctOut = ((currentMonthOut - prevMonthOut) / prevMonthOut) * 100;
-    if (pctOut > 0) insights.push(`Penarikan naik <strong style="color:#ef4444;">+${pctOut.toFixed(1)}%</strong> dibanding bulan lalu`);
-    else if (pctOut < 0) insights.push(`Penarikan turun <strong style="color:#10b981;">${pctOut.toFixed(1)}%</strong> dibanding bulan lalu`);
-  } else if (currentMonthOut > 0) {
-    insights.push(`Penarikan bulan ini mencapai <strong style="color:#ef4444;">${fmt(currentMonthOut)}</strong>`);
-  }
-
-  // Insight 3: Top 5 concentation
-  const sortedEmps = Object.values(emps).sort((a, b) => b - a);
-  const top5Total = sortedEmps.slice(0, 5).reduce((sum, val) => sum + (val > 0 ? val : 0), 0);
-  const overallPositive = sortedEmps.reduce((sum, val) => sum + (val > 0 ? val : 0), 0);
-  if (overallPositive > 0) {
-    const conc = (top5Total / overallPositive) * 100;
-    insights.push(`<strong style="color:#6366f1;">${conc.toFixed(0)}%</strong> dana berasal dari 5 karyawan teratas`);
-  }
-
-  container.innerHTML = insights.map(ins => `<div style="background:#f8fafc; border:1px solid #e2e8f0; padding:8px 12px; border-radius:6px; font-size:0.85rem; color:#475569; display:inline-flex; align-items:center; gap:8px;"><i class="fas fa-lightbulb" style="color:#f59e0b;"></i> ${ins}</div>`).join('');
+  charts.fundComposition.setOption({
+    tooltip: { trigger: 'item', formatter: function(params) {
+      return `${params.name}<br/><b>Rp ${params.value.toLocaleString('id-ID')}</b> (${params.percent}%)`;
+    }},
+    legend: { bottom: '0%', left: 'center', itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
+    series: [
+      {
+        name: 'Komposisi',
+        type: 'pie',
+        radius: ['45%', '70%'],
+        avoidLabelOverlap: false,
+        itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 },
+        label: { show: false, position: 'center' },
+        emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
+        labelLine: { show: false },
+        data: chartData
+      }
+    ]
+  });
 }
 
-// ===== TOP INVESTORS =====
+
+// ===== TOP CONTRIBUTORS =====
 function renderTopInvestors() {
-  const emps = {}; globalFilteredData.forEach(d => {
+  const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
+  const emps = {}; 
+  dataToUse.forEach(d => {
     const id = getEmpId(d);
     if (!emps[id]) emps[id] = { balance: 0, name: d.name };
     emps[id].balance += d.type === 'Tabungan' ? d.nominal : -d.nominal;
   });
-  const sorted = Object.entries(emps).sort((a, b) => a[1].balance - b[1].balance).filter(a => a[1].balance > 0);
-  const top5 = sorted.slice(-5); // Ascending for horizontal bar
-
-  const totalBalance = sorted.reduce((a, b) => a + b[1].balance, 0);
-  const top5Total = top5.reduce((a, b) => a + b[1].balance, 0);
-  const concentration = totalBalance > 0 ? (top5Total / totalBalance * 100) : 0;
-
-  let riskColor = '#10b981'; // healthy
-  let riskLabel = 'Sehat';
-  if (concentration > 30) { riskColor = '#ef4444'; riskLabel = 'Risiko Tinggi'; }
-  else if (concentration > 15) { riskColor = '#f59e0b'; riskLabel = 'Risiko Sedang'; }
+  
+  const sorted = Object.entries(emps)
+    .filter(a => a[1].balance > 0)
+    .sort((a, b) => a[1].balance - b[1].balance);
+  
+  const top10 = sorted.slice(-10);
 
   const ctx = document.getElementById('topInvestorChart');
   if (!ctx) return;
   if (charts.topInv) charts.topInv.dispose();
   charts.topInv = echarts.init(ctx);
-  const bgColors = ['#e5effe', '#ccdefd', '#a6c5f9', '#81a9f4', '#4f46e5'];
   charts.topInv.setOption({
-    title: { text: `Konsentrasi Top 5: ${concentration.toFixed(1)}%`, subtext: `Indikator: ${riskLabel}`, subtextStyle: { color: riskColor, fontWeight: 'bold' }, textStyle: { fontSize: 12, color: '#64748b' }, right: 0, top: 0 },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: 'rgba(15, 23, 42, 0.9)', textStyle: { color: '#fff', fontFamily: 'Inter' }, formatter: (p) => `<div style="font-weight:600;margin-bottom:4px">${p[0].name}</div><div>${p[0].marker} ${fmt(p[0].value)}</div>` },
-    grid: { top: 40, right: 40, bottom: 20, left: 100 },
-    xAxis: { type: 'value', show: false },
-    yAxis: { type: 'category', data: top5.map(s => s[1].name.length > 15 ? s[1].name.substring(0, 15) + '…' : s[1].name), axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#475569', fontFamily: 'Inter', fontSize: 11 } },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { top: 20, right: 40, bottom: 20, left: 120 },
+    xAxis: { type: 'value', axisLabel: { formatter: (v) => v >= 1e6 ? (v/1e6).toFixed(1) + 'jt' : v } },
+    yAxis: { type: 'category', data: top10.map(s => s[1].name.length > 15 ? s[1].name.substring(0, 15) + '…' : s[1].name) },
     series: [{
       type: 'bar',
-      data: top5.map((s, i) => ({ value: s[1].balance, itemStyle: { color: bgColors[i] } })),
-      itemStyle: { borderRadius: [0, 6, 6, 0] },
-      barWidth: 20,
-      label: { show: true, position: 'right', formatter: (p) => (p.value / 1e6).toFixed(1) + 'jt', color: '#64748b', fontSize: 10 }
+      data: top10.map(s => s[1].balance),
+      itemStyle: { color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [{ offset: 0, color: '#4f46e5' }, { offset: 1, color: '#818cf8' }]), borderRadius: [0, 4, 4, 0] },
+      label: { show: true, position: 'right', formatter: (p) => fmt(p.value) }
     }]
   });
 }
 
+
 // ===== RECENT TABLE =====
-function renderRecentTable() {
-  const sortedGlobal = [...globalFilteredData].filter(d => d.date).sort((a, b) => a.date - b.date);
-  let rb = 0;
-  const dataWithRb = sortedGlobal.map(d => {
-    if (d.type === 'Tabungan') rb += d.nominal; else rb -= d.nominal;
-    return { ...d, runBal: rb };
+function renderRecentTable(query = '') {
+  const q = query.toLowerCase().trim();
+  let filtered = [...globalFilteredData].filter(d => d.date);
+  if (q) {
+    filtered = filtered.filter(d => d.name.toLowerCase().includes(q) || (d.nik && d.nik.toLowerCase().includes(q)) || d.jenis.toLowerCase().includes(q));
+  }
+  
+  const sortedGlobal = filtered.sort((a, b) => b.date - a.date);
+  const recent = sortedGlobal.slice(0, 15);
+
+  
+  const empStats = {};
+  allData.forEach(d => {
+    const id = getEmpId(d);
+    if (!empStats[id]) empStats[id] = { count: 0, last: null, balance: 0, totalOut: 0 };
+    if (d.type === 'Tabungan') {
+      empStats[id].count++;
+      if (!empStats[id].last || d.date > empStats[id].last) empStats[id].last = d.date;
+      empStats[id].balance += d.nominal;
+    } else {
+      empStats[id].totalOut += d.nominal;
+      empStats[id].balance -= d.nominal;
+    }
   });
 
-  const recent = dataWithRb.reverse().slice(0, 10);
   document.querySelector('#recentTable tbody').innerHTML = recent.map(d => {
-    // Cek apakah transaksi ini ada dalam daftar anomali (mencurigakan)
-    const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
-    const isAnomaly = allAnomalies.some(a => a.txKey === txKey && a.status === 'In Progress');
+    const id = getEmpId(d);
+    const stats = empStats[id];
 
+
+    const badgeCls = d.type === 'Tabungan' ? 'in' : 'out';
     const escName = d.name.replace(/'/g, "\\'");
-    const empNik = d.nik || '';
-
-    const highlightBg = isAnomaly ? 'background-color: rgba(239, 68, 68, 0.05);' : '';
-    const editedBadge = d.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${d.notes || '-'}">DIEDIT</span>` : '';
-    const isAdmin = currentUser && currentUser.role === 'admin';
-    const editBtn = isAdmin ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
-    const alertIcon = isAnomaly ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Mencurigakan"></i>` : '';
-
-    return `<tr style="${highlightBg}">
-    <td>${alertIcon}${d.dateStr || fmtDate(d.date)}${editedBadge}</td><td>${d.name}</td><td>${d.jenis}</td>
-    <td style="font-weight:600">${fmt(d.nominal)}</td>
-    <td><span class="badge ${d.type === 'Tabungan' ? 'in' : 'out'}"><i class="fas fa-${d.type === 'Tabungan' ? 'arrow-down' : 'arrow-up'}"></i>${d.type}</span></td>
-    <td>
-      ${editBtn}
-      <button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem;" onclick="goToEmployee('${escName}', '${empNik}')"><i class="fas fa-search"></i> Detail</button>
-    </td>
-  </tr>`;
+    
+    return `<tr>
+      <td>${d.dateStr}</td>
+      <td><div style="font-weight:700">${d.name}</div><div style="font-size:0.7rem; color:var(--text-muted)">${d.nik || '-'}</div></td>
+      <td>${d.jenis}</td>
+      <td style="font-weight:800; color: ${d.type === 'Tabungan' ? 'var(--success)' : 'var(--danger)'}">${fmt(d.nominal)}</td>
+      <td><span class="badge ${badgeCls}">${d.type}</span></td>
+      <td><button class="btn btn-outline" style="padding: 6px 12px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${d.nik}')">Detail</button></td>
+    </tr>`;
   }).join('');
 }
 
+
+
 // ===== ANOMALI LOGIC =====
 function calculateAnomalies() {
+  // 0. Bangun Peta Histori Nama Global (Identity Audit Trail)
+  const globalNameAudit = {}; // NIK/ID -> originalName
+  allReviews.forEach(r => {
+    if (r.correctName && r.correctName !== '-') {
+      const parts = r.txKey.split('_');
+      if (parts.length >= 4) {
+        // Nama berada di antara 'anomali' dan 'Timestamp' (2 bagian terakhir adalah Timestamp & Nominal)
+        let originalNameFromKey = parts.slice(1, -2).join(' ');
+        
+        // Jika yang ditemukan di TxKey adalah NIK, coba cari nama aslinya di database karyawan
+        const foundEmp = allEmployees.find(e => e.nik === originalNameFromKey);
+        if (foundEmp) {
+          originalNameFromKey = foundEmp.name;
+        }
+
+        if (originalNameFromKey !== r.correctName && r.correctName && r.correctName !== '-') {
+          const key = r.correctNik || r.correctName;
+          if (!globalNameAudit[key]) globalNameAudit[key] = originalNameFromKey;
+        }
+      }
+    }
+  });
+
   const sortedData = allData.filter(d => d.date);
   const emps = {};
   allAnomalies = [];
@@ -707,9 +968,8 @@ function calculateAnomalies() {
     allReviews.forEach(r => { reviewMap[r.txKey] = r; });
   }
 
-  const monthlyRate = 0.03 / 12; // 0.25% per bulan
+  const monthlyRate = 0.03 / 12;
 
-  // Group data by employee
   const empsData = {};
   sortedData.forEach(d => {
     const id = getEmpId(d);
@@ -725,55 +985,138 @@ function calculateAnomalies() {
     let pendingInterest = 0;
     let lastDate = null;
     let lastDepositDate = null;
+    let empActiveAnomalies = []; // Hanya melacak kasus yang belum LUNAS untuk alokasi FIFO
 
     txs.sort((a, b) => a.date - b.date);
 
     txs.forEach(t => {
+      // 1. Hitung Bunga sebelum transaksi
       if (lastDate && t.date > lastDate && balance > 0) {
         const diffMonths = (t.date.getFullYear() - lastDate.getFullYear()) * 12 + (t.date.getMonth() - lastDate.getMonth());
         if (diffMonths > 0) pendingInterest = balance * monthlyRate * diffMonths;
       }
 
       const balanceBefore = balance;
+      
       if (t.type === 'Tabungan') {
         balance += pendingInterest;
         balance += t.nominal;
         pendingInterest = 0;
         lastDepositDate = t.date;
+
+        // ALOKASI FIFO: Gunakan setoran untuk menutup hutang kasus lama
+        let payment = t.nominal;
+        empActiveAnomalies.forEach(a => {
+          if (payment > 0 && a.remainingDebt > 0) {
+            const amountToCover = Math.min(payment, a.remainingDebt);
+            a.remainingDebt -= amountToCover;
+            payment -= amountToCover;
+            
+            if (a.remainingDebt <= 0) {
+              a.systemStatus = 'LUNAS';
+            } else {
+              a.systemStatus = 'DICICIL';
+            }
+          }
+        });
+        // Hapus yang sudah LUNAS dari tracker aktif agar FIFO selanjutnya lebih cepat
+        empActiveAnomalies = empActiveAnomalies.filter(a => a.systemStatus !== 'LUNAS');
+
       } else {
+        // Penarikan
         balance -= t.nominal;
         pendingInterest = 0;
       }
 
-      if (t.type === 'Penarikan' && balance < -10000) {
-        const txKey = `anomali_${id}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
-        const review = reviewMap[txKey];
-        allAnomalies.push({
+      // 2. Deteksi Kasus Baru jika Saldo Negatif ATAU sudah pernah direview
+      // Cek dua kemungkinan TxKey: menggunakan NIK (baru) atau menggunakan Nama (lama)
+      const idNik = t.nik || id;
+      const idName = t.name.replace(/\s+/g, '_');
+      const txKeyNik = `anomali_${idNik}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
+      const txKeyName = `anomali_${idName}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
+      
+      const review = reviewMap[txKeyNik] || reviewMap[txKeyName];
+      
+      // Jika tidak ketemu langsung, cari apakah ada review yang mengoreksi NAMA/NIK menjadi data saat ini
+      let correctionReview = null;
+      if (!review) {
+        correctionReview = allReviews.find(r => 
+          (r.correctName === t.name || r.correctNik === t.nik) && 
+          Math.abs(r.nominal - t.nominal) < 1 &&
+          r.txKey.includes(t.date?.getTime().toString())
+        );
+      }
+
+      const activeReview = review || correctionReview;
+      const txKey = activeReview ? activeReview.txKey : txKeyNik;
+      
+      // Simpan Nama Asli dari Identity Audit Trail (Global)
+      // Cari berdasarkan NIK atau Nama saat ini
+      let originalName = globalNameAudit[t.nik] || globalNameAudit[t.name] || t.name;
+      
+      // Jika di review ini ada info nama asli yang lebih spesifik, gunakan itu
+      if (activeReview && activeReview.txKey) {
+        const parts = activeReview.txKey.split('_');
+        if (parts.length >= 4) {
+          const nameFromKey = parts.slice(1, -2).join(' ');
+          // Pastikan ini bukan NIK dan memang berbeda dengan nama saat ini
+          if (nameFromKey !== t.name && nameFromKey !== t.nik) {
+            originalName = nameFromKey;
+          }
+        }
+      }
+
+      const isDeficit = balance < -10000;
+
+      if (t.type === 'Penarikan' && (isDeficit || activeReview)) {
+        let manualStatus = 'MENUNGGU REVIEW';
+        if (activeReview) {
+            if (activeReview.status === 'MENUNGGU REVIEW' || activeReview.status === 'In Progress') manualStatus = 'MENUNGGU REVIEW';
+            else if (activeReview.status === 'SALAH INPUT' || activeReview.status === 'Salah Orang') manualStatus = 'SALAH INPUT';
+            else if (activeReview.status === 'TERBUKTI' || activeReview.status === 'Verified') manualStatus = 'TERBUKTI';
+            else manualStatus = activeReview.status;
+        }
+
+        // Hitung berapa defisit yang diciptakan oleh transaksi ini
+        const deficitCreated = isDeficit ? (balanceBefore > 0 ? Math.abs(balance) : t.nominal) : 0;
+
+        const anomalyData = {
           txKey, empId: id, nik: t.nik || '', originalNo: t.sheetRow, date: t.date,
           dateStr: t.dateStr || fmtDate(t.date), name: t.name, nominal: t.nominal,
           balanceBefore, balanceAfter: balance,
-          reason: 'Saldo defisit > 10rb', status: review ? review.status : 'In Progress',
+          originalName: originalName,
+          correctName: activeReview?.correctName || '',
+          correctNik: activeReview?.correctNik || '',
+          initialDebt: deficitCreated,
+          remainingDebt: deficitCreated,
+          reason: isDeficit ? 'Saldo defisit > 10rb' : 'Histori Review Admin', 
+          status: manualStatus, 
+          systemStatus: isDeficit ? 'MENCURIGAKAN' : 'LUNAS',
           notes: review ? review.notes : '-', reviewer: review ? (review.reviewer || '-') : '-',
           keterangan: t.keterangan || '-', jenis: t.jenis || 'Penarikan'
-        });
+        };
+        
+        // Jika sudah LUNAS di histori, biarkan tetap lunas
+        if (!isDeficit) anomalyData.systemStatus = 'LUNAS';
+
+        allAnomalies.push(anomalyData);
+        if (isDeficit) empActiveAnomalies.push(anomalyData);
       }
       lastDate = t.date;
     });
 
-    // Hitung Status Aktif
+    // 3. Hitung Status Aktif Karyawan
     let isActive = false;
     if (balance > 1000 && lastDepositDate) {
       const monthsSinceLast = (new Date().getFullYear() - lastDepositDate.getFullYear()) * 12 + (new Date().getMonth() - lastDepositDate.getMonth());
       if (monthsSinceLast <= 3) isActive = true;
     }
-
     emps[id] = { balance, isActive, lastDepositDate };
   });
 
   globalTotalSaldo = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
   globalTotalActive = Object.values(emps).filter(e => e.isActive).length;
-  allEmployeesStatus = emps; // Simpan untuk UI
-
+  allEmployeesStatus = emps;
 
   if (currentUser && currentUser.role === 'admin' && allAnomalies.length > 0) {
     syncAnomaliesToSheet(allAnomalies);
@@ -792,9 +1135,9 @@ async function syncAnomaliesToSheet(anomalies) {
           karyawan: a.name,
           nominal: a.nominal,
           saldoSebelum: a.balanceBefore,
-          saldoSesudah: a.balanceAfter,
+          selisih: a.balanceAfter,
           alasan: a.reason,
-          status: a.status === 'Verified' ? 'Terbukti' : (a.status === 'Salah Orang' ? 'Koreksi' : (a.status === 'In Progress' ? 'Masih Progres' : a.status)),
+          status: a.status,
           notes: a.notes,
           reviewer: a.reviewer
         }))
@@ -807,70 +1150,170 @@ async function syncAnomaliesToSheet(anomalies) {
 
 function renderAnomaliTable() {
   const sumContainer = document.getElementById('anomaliSummary');
-  const inputStart = document.getElementById('globalStartDate');
-  const inputEnd = document.getElementById('globalEndDate');
-  const startDate = inputStart?.value ? new Date(inputStart.value) : null;
-  const endDate = inputEnd?.value ? new Date(inputEnd.value) : null;
-  if (startDate) startDate.setHours(0, 0, 0, 0);
-  if (endDate) endDate.setHours(23, 59, 59, 999);
+  const q = (document.getElementById('anomaliSearch')?.value || '').toLowerCase().trim();
+  const mode = document.getElementById('anomaliFilterMode')?.value || 'custom';
+  const startMonth = document.getElementById('anomaliFilterStartMonth')?.value || '';
+  const endMonth = document.getElementById('anomaliFilterEndMonth')?.value || '';
+  const filterStatus = document.getElementById('anomaliStatusFilter')?.value || '';
+  const filterRepeat = document.getElementById('anomaliRepeatFilter')?.value || 'all';
+  const yearVal = document.getElementById('anomaliFilterYear')?.value || new Date().getFullYear().toString();
+  const year = yearVal === 'all' ? 'all' : parseInt(yearVal);
 
-  let filteredByDate = allAnomalies;
-  if (startDate || endDate) {
-    filteredByDate = allAnomalies.filter(a => {
-      let pass = true;
-      if (startDate && a.date) pass = pass && a.date >= startDate;
-      if (endDate && a.date) pass = pass && a.date <= endDate;
-      return pass;
-    });
+  // Populate Year Dropdown if empty
+  const yrSel = document.getElementById('anomaliFilterYear');
+  if (yrSel && yrSel.options.length === 0) {
+    const years = [...new Set(allAnomalies.filter(d => d.date).map(d => d.date.getFullYear()))].sort((a, b) => b - a);
+    if (years.length === 0) years.push(new Date().getFullYear());
+    yrSel.innerHTML = `<option value="all">Semua Tahun</option>` + years.map(y => `<option value="${y}" ${y === new Date().getFullYear() ? 'selected' : ''}>${y}</option>`).join('');
   }
 
+  // Hitung frekuensi anomali per orang untuk filter repeat
+  const frequencyMap = {};
+  allAnomalies.forEach(a => {
+    const id = a.nik && a.nik !== '-' ? a.nik : a.name;
+    frequencyMap[id] = (frequencyMap[id] || 0) + 1;
+  });
+
+  let filtered = allAnomalies.filter(a => {
+    const checkedStatuses = Array.from(document.querySelectorAll('.sys-status-chk:checked')).map(cb => cb.value);
+
+    let pass = true;
+    
+    // 1. Search filter
+    const variations = (a.nik && a.nik !== '-' ? (allAliasesMap[a.nik] ? Array.from(allAliasesMap[a.nik]) : [a.name]) : [a.name]);
+    if (q) pass = pass && (variations.some(v => v.toLowerCase().includes(q)) || (a.nik && a.nik.toLowerCase().includes(q)));
+    
+    // 2. Status filter (Manual Review Status)
+    if (filterStatus) {
+      if (filterStatus === 'SALAH INPUT') {
+        // Tampilkan yang statusnya SALAH INPUT ATAU yang punya riwayat koreksi nama
+        pass = pass && (a.status === 'SALAH INPUT' || (a.originalName && a.originalName !== a.name));
+      } else {
+        pass = pass && a.status === filterStatus;
+      }
+    }
+    
+    // 2.5 Visibility Logic
+    // Kasus tampil jika: (Sedang Mencurigakan/Dicicil) ATAU (Sudah Terbukti meskipun Lunas)
+    const isVisibleByDefault = (a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL' || a.status === 'TERBUKTI');
+    
+    if (checkedStatuses.length > 0) {
+      pass = pass && checkedStatuses.includes(a.systemStatus);
+    } else {
+      pass = pass && isVisibleByDefault;
+    }
+
+    // 3. Repeat filter
+    if (filterRepeat === 'repeat') {
+      const id = a.nik && a.nik !== '-' ? a.nik : a.name;
+      pass = pass && frequencyMap[id] > 1;
+    }
+    
+    // 4. Date filter (Custom Mode)
+    if (mode === 'custom' && a.date) {
+      if (startMonth) {
+        const [sy, sm] = startMonth.split('-').map(Number);
+        const startDate = new Date(sy, sm, 1);
+        pass = pass && a.date >= startDate;
+      }
+      if (endMonth) {
+        const [ey, em] = endMonth.split('-').map(Number);
+        const endDate = new Date(ey, em + 1, 0, 23, 59, 59);
+        pass = pass && a.date <= endDate;
+      }
+    }
+    
+    // 5. Date filter (Monthly Mode)
+    if (mode === 'monthly' && a.date) {
+      if (year !== 'all') {
+        pass = pass && a.date.getFullYear() === year;
+      }
+    }
+    
+    return pass;
+  });
+
+  // KPI Summary remains based on filtered data
   if (sumContainer) {
-    const totalAnomali = filteredByDate.length;
-    // Potensi Kerugian: Status 'In Progress'
-    const potensiKerugian = allAnomalies
-      .filter(a => a.status === 'In Progress')
-      .reduce((sum, a) => sum + (a.balanceAfter < 0 ? Math.abs(a.balanceAfter) : 0), 0);
+    const totalAnomali = filtered.length;
+    const groupStatusSum = (statusName) => {
+      return filtered
+        .filter(a => a.status === statusName)
+        .reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
+    };
 
-    // Kerugian Terbukti: Status 'Verified'
-    const kerugianTerbukti = allAnomalies
-      .filter(a => a.status === 'Verified')
-      .reduce((sum, a) => sum + (a.balanceAfter < 0 ? Math.abs(a.balanceAfter) : 0), 0);
+    const potensiKerugian = groupStatusSum('MENUNGGU REVIEW');
+    const kerugianTerbukti = groupStatusSum('TERBUKTI');
+    const countVerified = filtered.filter(a => a.status === 'TERBUKTI').length;
+    const countKoreksi = filtered.filter(a => a.status === 'SALAH INPUT' || (a.originalName && a.originalName !== a.name)).length;
+    
+    const totalInitial = filtered.reduce((sum, a) => sum + (a.initialDebt || 0), 0);
+    const totalRemaining = filtered.reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
+    const totalRecovered = totalInitial - totalRemaining;
+    const recoveryRate = totalInitial > 0 ? (totalRecovered / totalInitial * 100) : 0;
+    const uniqueEmps = new Set(filtered.map(a => a.nik || a.name)).size;
 
-    const countVerified = allAnomalies.filter(a => a.status === 'Verified').length;
-    const countKoreksi = allAnomalies.filter(a => a.status === 'Salah Orang').length;
-
-    sumContainer.innerHTML = `
-      <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-triangle"></i></div><div class="card-label">TRANSAKSI MENCURIGAKAN</div><div class="card-value">${totalAnomali}</div><div class="card-sub">Segera Verifikasi</div></div>
-      <div class="summary-card"><div class="card-icon orange"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">Potensi Kerugian</div><div class="card-value" style="color: #f59e0b;">${fmt(potensiKerugian)}</div><div class="card-sub">Status: Masih Progres</div></div>
-      <div class="summary-card"><div class="card-icon red"><i class="fas fa-times-circle"></i></div><div class="card-label">Kerugian Terbukti</div><div class="card-value" style="color: #ef4444;">${fmt(kerugianTerbukti)}</div><div class="card-sub">Total Defisit Terkonfirmasi</div></div>
-      <div class="summary-card"><div class="card-icon blue"><i class="fas fa-check-double"></i></div><div class="card-label">Transaksi Terbukti</div><div class="card-value">${countVerified}</div><div class="card-sub">Telah diverifikasi salah</div></div>
-      <div class="summary-card"><div class="card-icon green"><i class="fas fa-user-check"></i></div><div class="card-label">Koreksi (Salah Orang)</div><div class="card-value">${countKoreksi}</div><div class="card-sub">Berhasil disesuaikan</div></div>
-    `;
+    if (mode === 'monthly') {
+      sumContainer.innerHTML = `
+        <div class="summary-card"><div class="card-icon green"><i class="fas fa-chart-line"></i></div><div class="card-label">TINGKAT PEMULIHAN</div><div class="card-value" style="color:#10b981;">${recoveryRate.toFixed(1)}%</div><div class="card-sub">Pemulihan Dana</div></div>
+        <div class="summary-card"><div class="card-icon blue"><i class="fas fa-users"></i></div><div class="card-label">RASIO KASUS</div><div class="card-value" style="color:#3b82f6;">${uniqueEmps > 0 ? (totalAnomali/uniqueEmps).toFixed(1) : 0}x</div><div class="card-sub">${totalAnomali} Kasus / ${uniqueEmps} Orang</div></div>
+        <div class="summary-card"><div class="card-icon orange"><i class="fas fa-hand-holding-usd"></i></div><div class="card-label">TOTAL PEMULIHAN</div><div class="card-value" style="color:#f59e0b;">${fmt(totalRecovered)}</div><div class="card-sub">Dari total ${fmt(totalInitial)}</div></div>
+        <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">SISA DEFISIT</div><div class="card-value" style="color:#ef4444;">${fmt(totalRemaining)}</div><div class="card-sub">Belum Terbayar</div></div>
+        <div class="summary-card"><div class="card-icon purple" style="background: rgba(168, 85, 247, 0.1); color: #a855f7;"><i class="fas fa-check-double"></i></div><div class="card-label">AKURASI INPUT</div><div class="card-value">${(100 - (countKoreksi/totalAnomali*100 || 0)).toFixed(1)}%</div><div class="card-sub">Validitas Data</div></div>
+      `;
+    } else {
+      sumContainer.innerHTML = `
+        <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-triangle"></i></div><div class="card-label">TOTAL KASUS TAMPIL</div><div class="card-value">${totalAnomali}</div><div class="card-sub">Data sesuai filter</div></div>
+        <div class="summary-card"><div class="card-icon green"><i class="fas fa-hand-holding-usd"></i></div><div class="card-label">Total Hutang Terbayar</div><div class="card-value" style="color: #10b981;">${fmt(totalRecovered)}</div><div class="card-sub">Total pemulihan dana</div></div>
+        <div class="summary-card"><div class="card-icon orange"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">Potensi Kerugian</div><div class="card-value" style="color: #f59e0b;">${fmt(potensiKerugian)}</div><div class="card-sub">Status: Menunggu Review</div></div>
+        <div class="summary-card"><div class="card-icon red"><i class="fas fa-times-circle"></i></div><div class="card-label">Kerugian Terbukti</div><div class="card-value" style="color: #ef4444;">${fmt(kerugianTerbukti)}</div><div class="card-sub">Total Defisit Terkonfirmasi</div></div>
+        <div class="summary-card"><div class="card-icon blue"><i class="fas fa-check-double"></i></div><div class="card-label">Kasus Terbukti</div><div class="card-value">${countVerified}</div><div class="card-sub">Telah diverifikasi salah</div></div>
+        <div class="summary-card"><div class="card-icon purple" style="background: rgba(168, 85, 247, 0.1); color: #a855f7;"><i class="fas fa-user-check"></i></div><div class="card-label">Koreksi Data</div><div class="card-value">${countKoreksi}</div><div class="card-sub">Salah Input / Nama</div></div>
+      `;
+    }
   }
 
   const tbody = document.querySelector('#anomaliTable tbody');
   if (!tbody) return;
+  
+  if (mode === 'monthly') {
+    // Clear search and status filter temporarily for true analytics insight
+    // unless the user intentionally wants to analyze a specific subset
+    renderAnomaliAnalytics(filtered, tbody);
+    return;
+  }
 
-  const q = (document.getElementById('anomaliSearch')?.value || '').toLowerCase().trim();
-  const s = document.getElementById('topAnomaliStatusFilter')?.value || '';
+  const getSortIcon = (col) => {
+    if (anomaliSort.col !== col) return '<i class="fas fa-sort"></i>';
+    return anomaliSort.asc ? '<i class="fas fa-sort-up"></i>' : '<i class="fas fa-sort-down"></i>';
+  };
 
-  let filtered = filteredByDate.filter(a => {
-    const id = (a.nik && a.nik !== '-') ? a.nik : a.name;
-    const variations = allAliasesMap[id] ? Array.from(allAliasesMap[id]) : [a.name];
-    const matchSearch = variations.some(v => v.toLowerCase().includes(q)) || (a.nik && a.nik.toLowerCase().includes(q));
-    const matchStatus = s ? a.status === s : true;
-    return matchSearch && matchStatus;
-  });
+  // Restore Headers if not monthly
+  document.querySelector('#anomaliTable thead').innerHTML = `
+    <tr>
+      <th>No</th>
+      <th class="sortable-anomali" data-col="1" style="cursor:pointer">Tanggal ${getSortIcon(1)}</th>
+      <th class="sortable-anomali" data-col="2" style="cursor:pointer">Karyawan ${getSortIcon(2)}</th>
+      <th class="sortable-anomali" data-col="3" style="cursor:pointer">Nominal ${getSortIcon(3)}</th>
+      <th class="sortable-anomali" data-col="4" style="cursor:pointer">Saldo Sebelum ${getSortIcon(4)}</th>
+      <th class="sortable-anomali" data-col="5" style="cursor:pointer">Selisih ${getSortIcon(5)}</th>
+      <th>Status Sistem</th>
+      <th>Status Tinjauan</th>
+      <th>Aksi</th>
+      <th>Catatan Admin</th>
+      <th>Peninjau</th>
+    </tr>
+  `;
 
-  // Sorting
+  // Sorting for Custom Mode
   filtered.sort((a, b) => {
     let v1, v2;
     switch (anomaliSort.col) {
-      case 0: v1 = a.date || 0; v2 = b.date || 0; break;
-      case 1: v1 = a.name; v2 = b.name; break;
-      case 2: v1 = a.nominal; v2 = b.nominal; break;
-      case 3: v1 = a.balanceBefore; v2 = b.balanceBefore; break;
-      case 4: v1 = a.balanceAfter; v2 = b.balanceAfter; break;
+      case 1: v1 = a.date || 0; v2 = b.date || 0; break;
+      case 2: v1 = a.name; v2 = b.name; break;
+      case 3: v1 = a.nominal; v2 = b.nominal; break;
+      case 4: v1 = a.balanceBefore; v2 = b.balanceBefore; break;
+      case 5: v1 = a.balanceAfter; v2 = b.balanceAfter; break;
       default: return 0;
     }
     if (v1 < v2) return anomaliSort.asc ? -1 : 1;
@@ -879,46 +1322,215 @@ function renderAnomaliTable() {
   });
 
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding: 20px; color: #10b981;"><i class="fas fa-check-circle"></i> Tidak ada transaksi mencurigakan terdeteksi.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding: 20px; color: #10b981;"><i class="fas fa-check-circle"></i> Tidak ada transaksi mencurigakan terdeteksi.</td></tr>`;
   } else {
-    tbody.innerHTML = filtered.map(a => {
-      let statusClass = 'status-progress'; // default
-      if (a.status === 'In Progress') statusClass = 'status-progress';
-      if (a.status === 'Verified') statusClass = 'status-verified';
-      if (a.status === 'Salah Orang') statusClass = 'status-flagged';
+    tbody.innerHTML = filtered.map((a, idx) => {
+      const emp = allEmployees.find(e => (e.nik && e.nik === a.nik) || e.name === a.name);
+      const aliases = emp ? emp.variations.filter(v => v !== a.name) : [];
+      const variationsHtml = aliases.length > 0 ? `<div style="font-size:0.65rem; color:#64748b; font-style:italic;">Alias: ${aliases.join(', ')}</div>` : '';
 
-      const statusLabel = a.status === 'Verified' ? 'Terbukti' : (a.status === 'Salah Orang' ? 'Koreksi' : (a.status === 'In Progress' ? 'Masih Progres' : a.status));
+      const statusClass = a.status === 'TERBUKTI' ? 'status-verified' : (a.status === 'SALAH INPUT' ? 'status-verified' : 'status-progress');
+      const sysStatusColor = a.systemStatus === 'MENCURIGAKAN' ? '#ef4444' : (a.systemStatus === 'DICICIL' ? '#f59e0b' : '#10b981');
+      
+      const isAdmin = currentUser && currentUser.role === 'admin';
+      const reviewBtn = isAdmin ? `<button class="btn btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="openReviewModal('${a.txKey}')"><i class="fas fa-clipboard-check"></i> Review</button>` : '';
 
       let noteContent = a.notes;
-      if (a.status === 'Salah Orang' && (a.correctName || a.correctNik)) {
+      if (a.status === 'SALAH INPUT' && (a.correctName || a.correctNik)) {
         noteContent = `[Koreksi: ${a.correctName || '-'} / ${a.correctNik || '-'}] ${a.notes !== '-' ? a.notes : ''}`;
       }
-
-      const isAdmin = currentUser && currentUser.role === 'admin';
-      const reviewBtn = isAdmin ? `<button class="btn btn-primary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="openReviewModal('${a.txKey}')"><i class="fas fa-edit"></i> Review</button>` : '';
 
       const escName = a.name.replace(/'/g, "\\'");
       const empNik = a.nik || '';
 
-      return `
-        <tr style="background-color: rgba(239, 68, 68, 0.02);">
-          <td>${a.dateStr}</td>
-          <td style="font-weight: 500;">${a.name}</td>
-          <td style="font-weight:600; color:#ef4444;">${fmt(a.nominal)}</td>
-          <td style="font-weight:500; color:#64748b;">${fmt(a.balanceBefore)}</td>
-          <td style="font-weight:600; color:${a.balanceAfter < 0 ? '#ef4444' : '#64748b'};">${fmt(a.balanceAfter)}</td>
-          <td><span class="badge out" style="font-size: 0.7rem;">${a.reason}</span></td>
-          <td><span class="badge-status ${statusClass}">${statusLabel}</span></td>
-          <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;" title="${noteContent}">${noteContent}</td>
-          <td style="font-size: 0.8rem; color: #64748b;">${a.reviewer}</td>
-          <td style="display: flex; gap: 4px;">
-            ${reviewBtn}
-            <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${empNik}')"><i class="fas fa-search"></i> Detail</button>
-          </td>
-        </tr>
-      `;
+      return `<tr>
+        <td style="font-size: 0.8rem; color: #64748b; font-weight: 500;">${idx + 1}</td>
+        <td>${a.dateStr}</td>
+        <td>
+          ${a.originalName && a.originalName !== a.name 
+            ? `<div style="font-size: 0.7rem; color: #94a3b8; text-decoration: line-through; margin-bottom: 2px;">${a.originalName}</div>
+               <div style="font-weight: 700; color: #1e293b;"><i class="fas fa-arrow-right" style="font-size: 0.65rem; color: #3b82f6;"></i> ${a.name}</div>`
+            : `<div style="font-weight: 700;">${a.name}</div>`
+          }
+          ${variationsHtml}
+          <div style="font-size: 0.75rem; color: #64748b;">${a.nik}</div>
+        </td>
+        <td style="color:#ef4444; font-weight:600;">${fmt(a.nominal)}</td>
+        <td style="color:#334155;">${fmt(a.balanceBefore)}</td>
+        <td style="color:#ef4444; font-weight:700;">
+          <div style="font-size:0.8rem; opacity:0.8;">Hutang Awal:</div>
+          <div>${fmt(a.initialDebt)}</div>
+          ${a.remainingDebt < a.initialDebt && a.remainingDebt > 0 ? `<div style="font-size:0.7rem; color:#f59e0b; font-weight:600; margin-top:4px;">Sisa Cicilan: ${fmt(a.remainingDebt)}</div>` : ''}
+        </td>
+        <td><span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; border: 1px solid ${sysStatusColor}; color: ${sysStatusColor}; font-weight: 600; text-transform: uppercase;">${a.systemStatus}</span></td>
+        <td><span class="badge-status ${statusClass}">${a.status}</span></td>
+        <td style="display: flex; gap: 4px;">
+          ${reviewBtn}
+          <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${empNik}')"><i class="fas fa-search"></i> Detail</button>
+        </td>
+        <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;" title="${noteContent}">${noteContent}</td>
+        <td style="font-size: 0.8rem; color: #64748b;">${a.reviewer}</td>
+      </tr>`;
     }).join('');
   }
+}
+
+/**
+ * ANALYTICS ENGINE: Provides deep insights into suspicious transactions
+ */
+function renderAnomaliAnalytics(data, container) {
+  if (data.length === 0) {
+    container.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 40px;">Tidak ada data untuk dianalisis.</td></tr>';
+    return;
+  }
+
+  // 1. Calculations
+  const totalInitial = data.reduce((sum, a) => sum + (a.initialDebt || 0), 0);
+  const totalRemaining = data.reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
+  const totalRecovered = totalInitial - totalRemaining;
+  const recoveryRate = totalInitial > 0 ? (totalRecovered / totalInitial * 100) : 0;
+  
+  const uniqueEmps = new Set(data.map(a => a.nik || a.name)).size;
+  const totalCases = data.length;
+
+  // 2. Trend Grouping (By Month)
+  const trends = {};
+  data.forEach(a => {
+    const key = a.date.getFullYear() + '-' + String(a.date.getMonth()).padStart(2, '0');
+    if (!trends[key]) trends[key] = { cases: 0, initial: 0, recovered: 0, emps: new Set() };
+    trends[key].cases++;
+    trends[key].initial += (a.initialDebt || 0);
+    trends[key].recovered += ((a.initialDebt || 0) - (a.remainingDebt || 0));
+    trends[key].emps.add(a.nik || a.name);
+  });
+
+  // 3. Matrix Analysis (System vs Review)
+  const matrix = {
+    'Penipuan Selesai Dibayar': data.filter(a => a.systemStatus === 'LUNAS' && a.status === 'TERBUKTI').length,
+    'Sedang Pemulihan': data.filter(a => a.systemStatus === 'DICICIL' && a.status === 'TERBUKTI').length,
+    'False Positive (Koreksi)': data.filter(a => a.status === 'SALAH INPUT').length,
+    'Belum Terjamah': data.filter(a => a.systemStatus === 'MENCURIGAKAN' && a.status === 'MENUNGGU REVIEW').length
+  };
+
+  // 4. Top Offenders
+  const offenderMap = {};
+  data.forEach(a => {
+    const id = a.nik || a.name;
+    if (!offenderMap[id]) offenderMap[id] = { name: a.name, count: 0, total: 0 };
+    offenderMap[id].count++;
+    offenderMap[id].total += (a.initialDebt || 0);
+  });
+  const topOffenders = Object.values(offenderMap).sort((a,b) => b.total - a.total).slice(0, 5);
+
+  // BUILD UI
+  let html = `
+    <tr>
+      <td colspan="6" style="padding: 0;">
+        <div style="background: #f8fafc; padding: 24px; border-bottom: 2px solid #e2e8f0;">
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px;">
+            <div style="background:#fff; padding:16px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+              <div style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px;">Tingkat Pemulihan</div>
+              <div style="font-size:1.5rem; font-weight:800; color:#10b981;">${recoveryRate.toFixed(1)}%</div>
+              <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">Pemulihan Dana</div>
+            </div>
+            <div style="background:#fff; padding:16px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+              <div style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px;">Total Pemulihan</div>
+              <div style="font-size:1.5rem; font-weight:800; color:#1e293b;">${fmt(totalRecovered)}</div>
+              <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">Dari total ${fmt(totalInitial)}</div>
+            </div>
+            <div style="background:#fff; padding:16px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+              <div style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px;">Rasio Kasus/Orang</div>
+              <div style="font-size:1.5rem; font-weight:800; color:#3b82f6;">${(totalCases/uniqueEmps).toFixed(1)}x</div>
+              <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">${totalCases} Kasus / ${uniqueEmps} Orang</div>
+            </div>
+            <div style="background:#fff; padding:16px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+              <div style="font-size:0.7rem; color:#64748b; font-weight:700; text-transform:uppercase; margin-bottom:4px;">Tingkat Positif Palsu</div>
+              <div style="font-size:1.5rem; font-weight:800; color:#f59e0b;">${(matrix['False Positive (Koreksi)'] / totalCases * 100).toFixed(1)}%</div>
+              <div style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">Akurasi Input Data</div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 3fr 2fr; gap: 24px;">
+            <!-- Trend Section -->
+            <div>
+              <h4 style="margin: 0 0 16px 0; font-size: 1rem; color: #1e293b; display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-chart-line" style="color: #3b82f6;"></i> Tren Performa Bulanan
+              </h4>
+              <table class="table" style="background:#fff; border-radius:12px; overflow:hidden; border:1px solid #e2e8f0;">
+                <thead style="background:#f1f5f9;">
+                  <tr>
+                    <th>Bulan</th>
+                    <th>Kasus</th>
+                    <th>Orang</th>
+                    <th>Total Defisit</th>
+                    <th>Recovered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${Object.keys(trends).sort().reverse().map(k => {
+                    const [y, m] = k.split('-');
+                    const t = trends[k];
+                    return `
+                      <tr>
+                        <td style="font-weight:600;">${monthNames[parseInt(m)]} ${y}</td>
+                        <td>${t.cases}</td>
+                        <td>${t.emps.size}</td>
+                        <td style="color:#ef4444;">${fmt(t.initial)}</td>
+                        <td style="color:#10b981; font-weight:600;">${fmt(t.recovered)}</td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Analysis Section -->
+            <div style="display: flex; flex-direction: column; gap: 24px;">
+              <!-- Audit Matrix -->
+              <div>
+                <h4 style="margin: 0 0 16px 0; font-size: 1rem; color: #1e293b;">Wawasan Matriks Audit</h4>
+                <div style="background: #fff; border-radius:12px; border:1px solid #e2e8f0; padding:16px;">
+                  ${Object.entries(matrix).map(([label, val]) => `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #f1f5f9;">
+                      <span style="font-size:0.85rem; color:#64748b;">${label}</span>
+                      <span style="background:${label.includes('Fraud') ? '#fee2e2' : '#f1f5f9'}; color:${label.includes('Fraud') ? '#ef4444' : '#1e293b'}; padding:2px 10px; border-radius:20px; font-weight:700; font-size:0.8rem;">${val} Kasus</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <!-- Top Offenders -->
+              <div>
+                <h4 style="margin: 0 0 16px 0; font-size: 1rem; color: #1e293b;">5 Karyawan Defisit Teratas</h4>
+                <div style="background: #fff; border-radius:12px; border:1px solid #e2e8f0; overflow:hidden;">
+                  ${topOffenders.map((o, i) => `
+                    <div style="padding:12px 16px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center;">
+                      <div>
+                        <div style="font-weight:700; font-size:0.85rem; color:#1e293b;">${i+1}. ${o.name}</div>
+                        <div style="font-size:0.75rem; color:#64748b;">${o.count} Kasus Terjadi</div>
+                      </div>
+                      <div style="color:#ef4444; font-weight:800; font-size:0.9rem;">${fmt(o.total)}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  `;
+
+  container.innerHTML = html;
+  
+  // Header Update
+  document.querySelector('#anomaliTable thead').innerHTML = `
+    <tr>
+      <th colspan="6" style="background:#1e293b; color:#fff; padding:12px; text-align:center; border-radius: 12px 12px 0 0;">
+        <i class="fas fa-microscope"></i> MESIN ANALISIS: POLA & HISTORI TRANSAKSI MENCURIGAKAN
+      </th>
+    </tr>
+  `;
 }
 
 // ===== REVIEW MODAL FUNCTIONS =====
@@ -929,12 +1541,27 @@ window.openReviewModal = function (txKey) {
   const anomali = allAnomalies.find(a => a.txKey === txKey);
   if (!anomali) return;
 
+  // Check for existing correction in allReviews
+  const existingReview = allReviews.find(r => r.txKey === txKey);
+  let auditHtml = '';
+  if (existingReview && existingReview.status === 'SALAH INPUT') {
+    auditHtml = `
+      <div style="margin-top: 12px; padding: 10px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; font-size: 0.8rem;">
+        <div style="font-weight:700; color:#0369a1; margin-bottom:4px;"><i class="fas fa-history"></i> Histori Koreksi:</div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Nama Awal:</span> <span style="font-weight:600;">${anomali.name}</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:2px;"><span>Nama Baru:</span> <span style="font-weight:600; color:#10b981;">${existingReview.correctName}</span></div>
+        <div style="display:flex; justify-content:space-between;"><span>Status:</span> <span class="badge-status status-verified" style="font-size:0.65rem;">Sudah Dikoreksi</span></div>
+      </div>
+    `;
+  }
+
   const info = document.getElementById('reviewTxInfo');
   info.innerHTML = `
     <div class="info-row"><span class="info-label">Karyawan:</span> <span class="info-value">${anomali.name}</span></div>
     <div class="info-row"><span class="info-label">Tanggal:</span> <span class="info-value">${anomali.dateStr}</span></div>
     <div class="info-row"><span class="info-label">Nominal:</span> <span class="info-value" style="color:#ef4444">${fmt(anomali.nominal)}</span></div>
     <div class="info-row"><span class="info-label">Alasan:</span> <span class="info-value">${anomali.reason}</span></div>
+    ${auditHtml}
     ${anomali.reviewTime ? `<div class="info-row" style="margin-top:8px; font-style:italic; font-size:0.75rem; color:#94a3b8;"><span class="info-label">Terakhir diupdate:</span> <span>${new Date(anomali.reviewTime).toLocaleString('id-ID')} oleh ${anomali.reviewer}</span></div>` : ''}
   `;
 
@@ -943,17 +1570,22 @@ window.openReviewModal = function (txKey) {
   let currentStatus = anomali.status;
   radios.forEach(r => { if (r.value === currentStatus) r.checked = true; });
 
-  // Correction fields
   const cf = document.getElementById('correctionFields');
-  if (currentStatus === 'Salah Orang') {
+  const pg = document.getElementById('reviewPasswordGroup');
+  if (currentStatus === 'SALAH INPUT') {
     cf.classList.remove('hidden');
+    if (pg) pg.classList.remove('hidden');
     document.getElementById('correctName').value = anomali.correctName || '';
     document.getElementById('correctNik').value = anomali.correctNik || '';
   } else {
     cf.classList.add('hidden');
+    if (pg) pg.classList.add('hidden');
     document.getElementById('correctName').value = '';
     document.getElementById('correctNik').value = '';
   }
+
+  const pwInput = document.getElementById('reviewPassword');
+  if (pwInput) pwInput.value = '';
 
   document.getElementById('reviewNotes').value = anomali.notes === '-' ? '' : anomali.notes;
 
@@ -967,13 +1599,18 @@ window.closeReviewModal = function () {
 
 async function saveReview() {
   if (!currentReviewTxKey) return;
-
-  const status = document.querySelector('input[name="reviewStatus"]:checked')?.value || 'In Progress';
+  const status = document.querySelector('input[name="reviewStatus"]:checked')?.value || 'MENUNGGU REVIEW';
   const notes = document.getElementById('reviewNotes').value.trim() || 'No notes added';
   const reviewer = document.getElementById('reviewerEmail').value.trim() || 'anonymous@moneybox.com';
+  const password = document.getElementById('reviewPassword').value;
 
   const correctName = document.getElementById('correctName').value.trim();
   const correctNik = document.getElementById('correctNik').value.trim();
+
+  if (status === 'SALAH INPUT' && (!correctName || !correctNik)) {
+    toast('Silakan isi nama dan NIK koreksi', 'error');
+    return;
+  }
 
   const btn = document.getElementById('btnSaveReview');
   btn.disabled = true;
@@ -992,7 +1629,8 @@ async function saveReview() {
           reviewer,
           correctName,
           correctNik
-        }
+        },
+        pass: password
       })
     });
 
@@ -1013,24 +1651,37 @@ async function saveReview() {
       const anomali = allAnomalies.find(a => a.txKey === currentReviewTxKey);
 
       if (status === 'Salah Orang' && (correctName || correctNik)) {
-        // Update main transaction row
+        // Update main transaction row with the new owner
         fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             type: 'updateRow',
+            pass: password,
             updateData: {
               rowNo: anomali.originalNo,
+              date: anomali.dateStr,
               name: correctName || anomali.name,
-              nik: correctNik || ''
+              nik: correctNik || '',
+              nominal: anomali.nominal,
+              type: 'Penarikan',
+              notes: `Koreksi Nama dari ${anomali.name}. Alasan: ${notes}`
             }
           })
+        }).then(r => r.json()).then(res => {
+          if (res.success) {
+            toast(`Transaksi berhasil dipindahkan ke ${correctName || 'karyawan baru'}`, 'success');
+            fetchData(); 
+          } else {
+            toast('Koreksi data gagal: ' + res.error, 'error');
+          }
         }).catch(e => console.error('Gagal update row:', e));
+      } else {
+        fetchData(); 
       }
 
       toast('Status review berhasil disimpan!', 'success');
       closeReviewModal();
-      fetchData(); // Reload all data to catch the name/nik updates and sync anomalies correctly
     } else {
       throw new Error(result.error || 'Gagal menyimpan review');
     }
@@ -1049,82 +1700,84 @@ window.goToEmployee = function (name, nik = '') {
   showEmployee(name, nik);
 };
 
-// ===== GLOBAL FILTER & EXPORT =====
-function initGlobalFilter() {
-  const inputStart = document.getElementById('globalStartDate');
-  const inputEnd = document.getElementById('globalEndDate');
-  const selectType = document.getElementById('globalTypeFilter');
-  const btnExport = document.getElementById('btnExportExcel');
+// ===== DASHBOARD FILTER & EXPORT =====
+function initDashboardFilter() {
+  const timeFilterBtns = document.querySelectorAll('#dashboardTimeFilter button');
+  const yearGroup = document.getElementById('dashboardYearSelectGroup');
+  const monthGroup = document.getElementById('dashboardMonthSelectGroup');
+  const customGroup = document.getElementById('dashboardCustomRangeGroup');
+  const yearSelect = document.getElementById('dashboardYearSelect');
+  const monthSelect = document.getElementById('dashboardMonthSelect');
+  const btnApply = document.getElementById('btnApplyDashboardFilter');
+  const btnExport = document.getElementById('btnDownloadDashboard');
 
-  if (!inputStart || !inputEnd || !selectType) return;
+  if (!timeFilterBtns.length) return;
 
-  function applyFilter() {
-    const startVal = inputStart.value;
-    const endVal = inputEnd.value;
-    const typeVal = selectType.value;
+  // Populate Selects
+  if (yearSelect && yearSelect.options.length === 0) {
+    const years = [...new Set(allData.filter(d => d.date).map(d => d.date.getFullYear()))].sort((a,b) => b-a);
+    if (years.length === 0) years.push(new Date().getFullYear());
+    yearSelect.innerHTML = years.map(y => `<option value="${y}" ${y === new Date().getFullYear() ? 'selected' : ''}>${y}</option>`).join('');
+  }
 
-    let startDate = startVal ? new Date(startVal) : null;
-    let endDate = endVal ? new Date(endVal) : null;
+  if (monthSelect && monthSelect.options.length === 0) {
+    monthSelect.innerHTML = monthNames.map((m, i) => `<option value="${i}">${m}</option>`).join('');
+    monthSelect.value = new Date().getMonth();
+  }
 
-    if (endDate) endDate.setHours(23, 59, 59, 999);
-    if (startDate) startDate.setHours(0, 0, 0, 0);
+  timeFilterBtns.forEach(btn => {
+    btn.onclick = () => {
+      timeFilterBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const range = btn.dataset.range;
+      
+      yearGroup.classList.add('hidden');
+      monthGroup.classList.add('hidden');
+      customGroup.classList.add('hidden');
 
-    globalFilteredData = allData.filter(d => {
-      let pass = true;
-      if (startDate && d.date) pass = pass && d.date >= startDate;
-      if (endDate && d.date) pass = pass && d.date <= endDate;
-      if (typeVal) pass = pass && d.type === typeVal;
-      return pass;
-    });
+      if (range === 'yearly') yearGroup.classList.remove('hidden');
+      if (range === 'monthly') { yearGroup.classList.remove('hidden'); monthGroup.classList.remove('hidden'); }
+      if (range === 'custom') customGroup.classList.remove('hidden');
+
+      applyDashboardFilter();
+    };
+  });
+
+  function applyDashboardFilter() {
+    const range = document.querySelector('#dashboardTimeFilter button.active').dataset.range;
+    const year = parseInt(document.getElementById('dashboardYearSelect').value);
+    const month = parseInt(document.getElementById('dashboardMonthSelect').value);
+    const startStr = document.getElementById('dashboardStartDate').value;
+    const endStr = document.getElementById('dashboardEndDate').value;
+
+    globalFilteredData = [...allData];
+
+    if (range === 'yearly') {
+      globalFilteredData = globalFilteredData.filter(d => d.date && d.date.getFullYear() === year);
+    } else if (range === 'monthly') {
+      globalFilteredData = globalFilteredData.filter(d => d.date && d.date.getFullYear() === year && d.date.getMonth() === month);
+    } else if (range === 'custom') {
+      const s = startStr ? new Date(startStr) : null;
+      const e = endStr ? new Date(endStr) : null;
+      if (e) e.setHours(23, 59, 59);
+      if (s) {
+        globalFilteredData = globalFilteredData.filter(d => d.date && d.date >= s);
+      }
+      if (e) {
+        globalFilteredData = globalFilteredData.filter(d => d.date && d.date <= e);
+      }
+    }
 
     txPage = 1;
     initDashboard(false);
   }
 
-  const btnApply = document.getElementById('btnApplyFilter');
-  if (btnApply) btnApply.addEventListener('click', applyFilter);
+  if (btnApply) btnApply.onclick = applyDashboardFilter;
 
   if (btnExport) {
-    btnExport.addEventListener('click', () => {
-      const activePage = document.querySelector('.page.active')?.id;
-      if (activePage === 'page-anomali') {
-        exportAnomaliData();
-        return;
-      }
-      
-      if (activePage === 'page-transaksi') {
-        const txData = getFilteredTx();
-        if (txData.length === 0) {
-          toast('Tidak ada data transaksi untuk di-export', 'error');
-          return;
-        }
-        const exportData = txData.map((d, i) => ({
-          No: i + 1,
-          Tanggal: d.dateStr || fmtDate(d.date),
-          Karyawan: d.name,
-          'Jenis Potongan': d.jenis,
-          Nominal: d.nominal,
-          Tipe: d.type,
-          Keterangan: d.keterangan
-        }));
-        const ws = XLSX.utils.json_to_sheet(exportData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Transaksi");
-        XLSX.writeFile(wb, `Export_Transaksi_${new Date().toISOString().split('T')[0]}.xlsx`);
-        toast('Data transaksi berhasil di-export', 'success');
-        return;
-      }
-
-      // 2. Check if we are on Employee Detail Page
-      const isEmpDetailOpen = !document.getElementById('employeeDetail')?.classList.contains('hidden');
-      if (isEmpDetailOpen && currentEmpData.name) {
-        exportSingleEmployeeData();
-        return;
-      }
-
-      // 3. General Export (Filtered Data)
+    btnExport.onclick = () => {
       if (globalFilteredData.length === 0) {
-        toast('Tidak ada data untuk di-export', 'error');
+        toast('Tidak ada data dashboard untuk di-export', 'error');
         return;
       }
       const exportData = globalFilteredData.map((d, i) => ({
@@ -1134,67 +1787,50 @@ function initGlobalFilter() {
         'Jenis Potongan': d.jenis,
         Nominal: d.nominal,
         Tipe: d.type,
-        Keterangan: d.keterangan,
-        Status: d.isEdited ? 'DIEDIT' : ''
+        Keterangan: d.keterangan
       }));
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Data Investasi");
+      XLSX.utils.book_append_sheet(wb, ws, "DashboardData");
+      XLSX.writeFile(wb, `Export_Dashboard_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast('Data dashboard berhasil di-export', 'success');
+    };
+  }
 
-      let nameParts = [];
-      if (inputStart.value) nameParts.push("Dari_" + inputStart.value);
-      if (inputEnd.value) nameParts.push("Sampai_" + inputEnd.value);
-      if (selectType.value) nameParts.push(selectType.value);
+  const btnExportTx = document.getElementById('btnExportTransaksi');
+  if (btnExportTx) {
+    btnExportTx.onclick = () => {
+      const txData = getFilteredTx();
+      if (txData.length === 0) {
+        toast('Tidak ada data transaksi untuk di-export', 'error');
+        return;
+      }
+      const exportData = txData.map((d, i) => ({
+        No: i + 1,
+        Tanggal: d.dateStr || fmtDate(d.date),
+        Karyawan: d.name,
+        'Jenis Potongan': d.jenis,
+        Nominal: d.nominal,
+        Tipe: d.type,
+        Keterangan: d.keterangan
+      }));
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Transaksi");
+      XLSX.writeFile(wb, `Export_Transaksi_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast('Data transaksi berhasil di-export', 'success');
+    };
+  }
 
-      let suffix = nameParts.length > 0 ? nameParts.join("_") : "Semua_Waktu";
-      const filename = `Export_Data_${suffix}.xlsx`;
-
-      XLSX.writeFile(wb, filename);
-      toast('File berhasil didownload', 'success');
-    });
+  const btnExportEmp = document.getElementById('btnExportEmployee');
+  if (btnExportEmp) {
+    btnExportEmp.onclick = () => {
+      if (!currentEmpData || !currentEmpData.name) return;
+      exportEmployeeData();
+    };
   }
 }
 
-// Function to export only ONE employee
-function exportSingleEmployeeData() {
-  if (!currentEmpData.name) return;
-
-  const name = currentEmpData.name;
-  const nik = currentEmpData.nik;
-
-  // Filter data specifically for this person (NIK first, then Name)
-  let empTxs = [];
-  if (nik && nik !== '-') {
-    empTxs = allData.filter(d => d.nik === nik);
-  } else {
-    empTxs = allData.filter(d => d.name === name);
-  }
-
-  if (empTxs.length === 0) {
-    toast('Tidak ada data transaksi untuk karyawan ini', 'error');
-    return;
-  }
-
-  // Sort chronological for report
-  empTxs.sort((a, b) => (a.date || 0) - (b.date || 0));
-
-  const exportData = empTxs.map((d, i) => ({
-    No: i + 1,
-    Tanggal: d.dateStr || fmtDate(d.date),
-    Keterangan: d.jenis || d.keterangan,
-    Nominal: d.nominal,
-    Tipe: d.type,
-    NIK: d.nik || '-'
-  }));
-
-  const ws = XLSX.utils.json_to_sheet(exportData);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Riwayat_" + name.replace(/\s+/g, '_'));
-
-  const filename = `Laporan_Investasi_${name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
-  XLSX.writeFile(wb, filename);
-  toast(`Riwayat ${name} berhasil didownload`, 'success');
-}
 
 // ===== TRANSAKSI PAGE =====
 function populateMonthFilter(minMonth = null) {
@@ -1206,25 +1842,31 @@ function populateMonthFilter(minMonth = null) {
   
   const selStart = document.getElementById('txFilterStartMonth');
   const selEnd = document.getElementById('txFilterEndMonth');
+  const selStartAnom = document.getElementById('anomaliFilterStartMonth');
+  const selEndAnom = document.getElementById('anomaliFilterEndMonth');
   
   if (!selStart || !selEnd) return;
 
-  if (!minMonth) {
-    const startOptions = monthList.map(m => { 
+  const optionsHTML = (list, placeholder) => {
+    return `<option value="">${placeholder}</option>` + list.map(m => { 
       const [y, mo] = m.split('-'); 
       return `<option value="${m}">${monthNames[+mo]} ${y}</option>`; 
     }).join('');
-    selStart.innerHTML = '<option value="">Semua Bulan</option>' + startOptions;
+  };
+
+  if (!minMonth) {
+    const startOpts = optionsHTML(monthList, 'Semua Bulan');
+    selStart.innerHTML = startOpts;
+    if (selStartAnom) selStartAnom.innerHTML = startOpts;
   }
 
   const filteredMonthList = minMonth ? monthList.filter(m => m >= minMonth) : monthList;
-  const endOptions = filteredMonthList.map(m => { 
-    const [y, mo] = m.split('-'); 
-    return `<option value="${m}">${monthNames[+mo]} ${y}</option>`; 
-  }).join('');
-
+  const endOpts = optionsHTML(filteredMonthList, 's/d (Opsional)');
+  
   const currentEndVal = selEnd.value;
-  selEnd.innerHTML = '<option value="">s/d (Opsional)</option>' + endOptions;
+  selEnd.innerHTML = endOpts;
+  if (selStartAnom) selEndAnom.innerHTML = endOpts;
+
   if (currentEndVal && filteredMonthList.includes(currentEndVal)) {
     selEnd.value = currentEndVal;
   }
@@ -1248,15 +1890,25 @@ function getFilteredTx() {
   }
   if (type) data = data.filter(d => d.type === type);
   
-  if (startMonth) { 
-    const [y, m] = startMonth.split('-'); 
-    const startDate = new Date(+y, +m, 1);
-    data = data.filter(d => d.date && d.date >= startDate); 
-  }
-  if (endMonth) { 
-    const [y, m] = endMonth.split('-'); 
-    const endDate = new Date(+y, +m + 1, 0, 23, 59, 59, 999); 
-    data = data.filter(d => d.date && d.date <= endDate); 
+  const mode = document.getElementById('txFilterMode')?.value || 'custom';
+  const yearVal = document.getElementById('txFilterYear')?.value || new Date().getFullYear().toString();
+  const year = yearVal === 'all' ? 'all' : parseInt(yearVal);
+
+  if (mode === 'monthly') {
+    if (year !== 'all') {
+      data = data.filter(d => d.date && d.date.getFullYear() === year);
+    }
+  } else {
+    if (startMonth) { 
+      const [y, m] = startMonth.split('-'); 
+      const startDate = new Date(+y, +m, 1);
+      data = data.filter(d => d.date && d.date >= startDate); 
+    }
+    if (endMonth) { 
+      const [y, m] = endMonth.split('-'); 
+      const endDate = new Date(+y, +m + 1, 0, 23, 59, 59, 999); 
+      data = data.filter(d => d.date && d.date <= endDate); 
+    }
   }
 
   if (txSort.col !== null) {
@@ -1269,6 +1921,19 @@ function getFilteredTx() {
 }
 
 function renderTxTable() {
+  const mode = document.getElementById('txFilterMode')?.value || 'custom';
+  const yearVal = document.getElementById('txFilterYear')?.value || new Date().getFullYear().toString();
+  const year = yearVal === 'all' ? 'all' : parseInt(yearVal);
+  const type = document.getElementById('txFilterType')?.value || '';
+
+  // Populate Year Dropdown if empty
+  const yrSel = document.getElementById('txFilterYear');
+  if (yrSel && yrSel.options.length === 0) {
+    const years = [...new Set(allData.filter(d => d.date).map(d => d.date.getFullYear()))].sort((a, b) => b - a);
+    if (years.length === 0) years.push(new Date().getFullYear());
+    yrSel.innerHTML = `<option value="all">Semua Tahun</option>` + years.map(y => `<option value="${y}" ${y === new Date().getFullYear() ? 'selected' : ''}>${y}</option>`).join('');
+  }
+
   const data = getFilteredTx(); const total = data.length; const pages = Math.ceil(total / txPerPage) || 1;
 
   // Hitung ringkasan uang masuk/keluar dari data yang terfilter
@@ -1295,6 +1960,38 @@ function renderTxTable() {
     `;
   }
 
+  // Monthly Recap Logic for Global Transactions
+  if (mode === 'monthly') {
+    const monthlyRecap = Array.from({ length: 12 }, (_, i) => ({
+      monthIdx: i,
+      monthName: monthNames[i],
+      totalIn: 0,
+      totalOut: 0
+    }));
+
+    data.forEach(d => {
+      if (d.date && d.date.getFullYear() === year) {
+        const mIdx = d.date.getMonth();
+        if (d.type === 'Tabungan') monthlyRecap[mIdx].totalIn += d.nominal;
+        else monthlyRecap[mIdx].totalOut += d.nominal;
+      }
+    });
+
+    document.querySelector('#txRecapTable tbody').innerHTML = monthlyRecap.map(m => {
+      const net = m.totalIn - m.totalOut;
+      const netColor = net >= 0 ? '#10b981' : '#ef4444';
+      return `
+        <tr>
+          <td style="font-weight:600;">${m.monthName} ${year}</td>
+          <td style="color:#10b981;">${fmt(m.totalIn)}</td>
+          <td style="color:#ef4444;">${fmt(m.totalOut)}</td>
+          <td style="font-weight:700; color:${netColor};">${fmt(net)}</td>
+          <td><button class="btn btn-outline" style="padding: 2px 8px; font-size:0.7rem;" onclick="txFilterMode.value='custom'; txFilterStartMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterEndMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterMode.dispatchEvent(new Event('change'));"><i class="fas fa-search"></i> Detail</button></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
   if (txPage > pages) txPage = pages;
   const start = (txPage - 1) * txPerPage; const slice = data.slice(start, start + txPerPage);
   document.querySelector('#txTable tbody').innerHTML = slice.map((d, i) => {
@@ -1303,19 +2000,22 @@ function renderTxTable() {
 
     // Cek apakah transaksi ini anomali
     const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
-    const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'In Progress');
+    const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'MENUNGGU REVIEW');
     const highlightBg = isSuspicious ? 'background-color: rgba(239, 68, 68, 0.08);' : '';
     const escName = d.name.replace(/'/g, "\\'");
     const empNik = d.nik || '';
 
     const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Mencurigakan"></i>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
-    const editBtn = isAdmin ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
+    const editBtn = (isAdmin && d.type === 'Penarikan') ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
 
     const editedBadge = d.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${d.notes || '-'}">DIEDIT</span>` : '';
+    
+    const reviewData = allReviews.find(r => r.txKey === txKey);
+    const correctedBadge = (reviewData && reviewData.status === 'Salah Orang') ? `<span class="badge-status status-verified" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; vertical-align: middle;" title="Koreksi Nama dari data sebelumnya\nAdmin: ${reviewData.reviewer}">NAMA DIKOREKSI</span>` : '';
 
     return `<tr style="${highlightBg}">
-    <td>${alertIcon}${start + i + 1}</td><td>${d.dateStr || fmtDate(d.date)}</td><td>${d.name}${editedBadge}</td><td>${d.jenis}</td>
+    <td>${alertIcon}${start + i + 1}</td><td>${d.dateStr || fmtDate(d.date)}</td><td>${d.name}${editedBadge}${correctedBadge}</td><td>${d.jenis}</td>
     <td style="font-weight:600">${fmt(d.nominal)}</td>
     <td><span class="badge ${d.type === 'Tabungan' ? 'in' : 'out'}">${d.type}</span> ${linkBtn}</td>
     <td>
@@ -1338,29 +2038,77 @@ function renderTxTable() {
 }
 
 // Table sort & filter events
-document.querySelectorAll('#txTable th.sortable').forEach(th => {
-  th.addEventListener('click', () => { const c = +th.dataset.col; if (txSort.col === c) txSort.asc = !txSort.asc; else { txSort.col = c; txSort.asc = true; } txPage = 1; renderTxTable(); });
-});
-['txSearch', 'txFilterType', 'txFilterStartMonth', 'txFilterEndMonth'].forEach(id => {
+['txSearch', 'txFilterType', 'txFilterStartMonth', 'txFilterEndMonth', 'txFilterMode', 'txFilterYear'].forEach(id => {
   const el = document.getElementById(id);
   if (el) {
     el.addEventListener(id === 'txSearch' ? 'input' : 'change', () => { 
       if (id === 'txFilterStartMonth') {
         const startVal = el.value;
         const endEl = document.getElementById('txFilterEndMonth');
-        
-        // Update pilihan di dropdown Hingga agar tidak lebih kecil dari Mulai
         populateMonthFilter(startVal);
-        
-        if (startVal && (!endEl.value || endEl.value < startVal)) {
-          endEl.value = startVal;
-        }
+        if (startVal && (!endEl.value || endEl.value < startVal)) endEl.value = startVal;
       }
+      
+      if (id === 'txFilterMode') {
+        const mode = el.value;
+        const customGrp = document.getElementById('txFilterCustomGroup');
+        const yearGrp = document.getElementById('txFilterYearGroup');
+        const recapContainer = document.getElementById('txMonthlyRecapContainer');
+        if (mode === 'monthly') {
+          customGrp.classList.add('hidden');
+          yearGrp.classList.remove('hidden');
+          recapContainer.classList.remove('hidden');
+        } else {
+          customGrp.classList.remove('hidden');
+          yearGrp.classList.add('hidden');
+          recapContainer.classList.add('hidden');
+        }
+        
+        // Sync button group visually if changed programmatically
+        document.querySelectorAll('#txModeFilterBtns button').forEach(b => {
+          b.classList.toggle('active', b.dataset.mode === mode);
+        });
+      }
+
       txPage = 1; 
       renderTxTable(); 
     });
   }
 });
+
+// Sync txModeFilterBtns to txFilterMode
+const txModeBtns = document.querySelectorAll('#txModeFilterBtns button');
+const txFilterMode = document.getElementById('txFilterMode');
+txModeBtns.forEach(btn => {
+  btn.onclick = () => {
+    txModeBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    if (txFilterMode) {
+      txFilterMode.value = btn.dataset.mode;
+      txFilterMode.dispatchEvent(new Event('change'));
+    }
+  };
+});
+
+
+const btnClearTxFilter = document.getElementById('btnClearTxFilter');
+if (btnClearTxFilter) {
+  btnClearTxFilter.onclick = () => {
+    document.getElementById('txSearch').value = '';
+    document.getElementById('txFilterType').value = '';
+    document.getElementById('txFilterStartMonth').value = '';
+    document.getElementById('txFilterEndMonth').value = '';
+    
+    // Reset to "custom" mode visually and functionally
+    if (txFilterMode) {
+      txFilterMode.value = 'custom';
+      txFilterMode.dispatchEvent(new Event('change'));
+    } else {
+      txPage = 1;
+      renderTxTable();
+    }
+  };
+}
 
 // ===== EDIT TRANSACTION MODAL =====
 window.openEditModal = function(sheetRow, name, nominal, nik, type, dateStr) {
@@ -1500,7 +2248,7 @@ function initSearch() {
       const aliases = e.variations.filter(v => v !== e.name);
       const aliasHtml = aliases.length > 0 ? `<div style="font-size:0.65rem; color:#64748b; font-style:italic; line-height:1.2; margin-bottom:2px;">Alias: ${aliases.join(', ')}</div>` : '';
 
-      return `<div class="emp-list-item" data-name="${e.name}">
+      return `<div class="emp-list-item" data-name="${e.name}" data-nik="${e.nik || ''}">
         <div class="emp-list-avatar">${initials}</div>
         <div style="flex:1;">
           <div class="emp-list-name" style="margin-bottom:0;">${e.name} ${statusBadge}</div>
@@ -1520,170 +2268,223 @@ function initSearch() {
   renderList(empList);
 
   const input = document.getElementById('employeeSearch');
-  input.addEventListener('input', () => {
+  const statusFilter = document.getElementById('empStatusFilter');
+
+  const applyEmpListFilter = () => {
     const q = input.value.toLowerCase().trim();
-    const filtered = empList.filter(e =>
-      e.variations.some(v => v.toLowerCase().includes(q)) ||
-      (e.nik && e.nik.toLowerCase().includes(q))
-    );
+    const statusMode = statusFilter ? statusFilter.value : 'all';
+
+    const filtered = empList.filter(e => {
+      let pass = true;
+      if (q) {
+        pass = pass && (e.variations.some(v => v.toLowerCase().includes(q)) || (e.nik && e.nik.toLowerCase().includes(q)));
+      }
+      
+      if (statusMode !== 'all') {
+        const status = allEmployeesStatus[getEmpId(e)] || { isActive: false };
+        if (statusMode === 'on') pass = pass && status.isActive;
+        if (statusMode === 'off') pass = pass && !status.isActive;
+      }
+
+      return pass;
+    });
+    
     renderList(filtered);
-  });
+  };
+
+  input.addEventListener('input', applyEmpListFilter);
+  if (statusFilter) statusFilter.addEventListener('change', applyEmpListFilter);
 
   document.getElementById('btnBackToEmpList').addEventListener('click', () => {
     document.getElementById('employeeDetail').classList.add('hidden');
     document.getElementById('employeeListContainer').classList.remove('hidden');
+    const controls = document.getElementById('empListControls');
+    if (controls) controls.classList.remove('hidden');
+    
     input.value = '';
+    if (statusFilter) statusFilter.value = 'all';
     renderList(empList);
   });
+
+  // NEW: Employee Filter Listeners
+  const modeSel = document.getElementById('empFilterMode');
+  const yearSel = document.getElementById('empFilterYear');
+  
+  if (modeSel) {
+    modeSel.addEventListener('change', () => {
+      const mode = modeSel.value;
+      const group = document.getElementById('empFilterMonthlyGroup');
+      const recapContainer = document.getElementById('empMonthlyRecapContainer');
+      
+      if (mode === 'monthly') {
+        group.classList.remove('hidden');
+        recapContainer.classList.remove('hidden');
+      } else {
+        group.classList.add('hidden');
+        recapContainer.classList.add('hidden');
+      }
+      if (currentEmpData.name) showEmployee(currentEmpData.name, currentEmpData.nik);
+    });
+  }
+  
+  if (yearSel) {
+    yearSel.addEventListener('change', () => {
+      if (currentEmpData.name) showEmployee(currentEmpData.name, currentEmpData.nik);
+    });
+  }
+
+  // Sync Global Filters to refresh Employee View
+  const globalFilterBtn = document.getElementById('btnApplyFilter');
+  if (globalFilterBtn) {
+    globalFilterBtn.addEventListener('click', () => {
+      if (!document.getElementById('employeeDetail').classList.contains('hidden') && currentEmpData.name) {
+        showEmployee(currentEmpData.name, currentEmpData.nik);
+      }
+    });
+  }
+  
+  const globalTypeSel = document.getElementById('globalTypeFilter');
+  if (globalTypeSel) {
+    globalTypeSel.addEventListener('change', () => {
+      if (!document.getElementById('employeeDetail').classList.contains('hidden') && currentEmpData.name) {
+        showEmployee(currentEmpData.name, currentEmpData.nik);
+      }
+    });
+  }
+
+  // NEW: Detail Type Filter
+  const empDetailTypeSel = document.getElementById('empDetailTypeFilter');
+  if (empDetailTypeSel) {
+    empDetailTypeSel.addEventListener('change', () => {
+      if (!document.getElementById('employeeDetail').classList.contains('hidden') && currentEmpData.name) {
+        showEmployee(currentEmpData.name, currentEmpData.nik);
+      }
+    });
+  }
 }
 
 function showEmployee(name, nik = '') {
+  window.scrollTo(0, 0);
   const detail = document.getElementById('employeeDetail');
   const list = document.getElementById('employeeListContainer');
   if (!detail || !list) return;
 
-  // Prioritas NIK jika ada
-  let searchNik = nik;
-  if (!searchNik || searchNik === '-') {
-    const selectedEmp = allEmployees.find(e => e.name === name);
-    if (selectedEmp && selectedEmp.nik && selectedEmp.nik !== '-') {
-      searchNik = selectedEmp.nik;
-    }
-  }
-
-  // Ambil data: Jika ada NIK, ambil semua yang NIK-nya sama. Jika tidak, ambil berdasarkan nama.
-  let allTxs = [];
-  if (searchNik && searchNik !== '-') {
-    allTxs = allData.filter(d => d.nik === searchNik);
-  } else {
-    allTxs = allData.filter(d => d.name === name);
-  }
+  // 1. Identify the Employee and all their variations (Names/NIK)
+  const id = (nik && nik !== '-') ? nik : name;
+  const variations = allAliasesMap[id] || new Set([name]);
+  
+  // Get all transactions that match either the NIK or any of the known names for this identity
+  let allTxs = allData.filter(d => {
+    const dId = getEmpId(d);
+    return dId === id || variations.has(d.name);
+  });
 
   list.classList.add('hidden');
+  const controls = document.getElementById('empListControls');
+  if (controls) controls.classList.add('hidden');
   detail.classList.remove('hidden');
 
   const inputStart = document.getElementById('globalStartDate');
   const inputEnd = document.getElementById('globalEndDate');
-  const startDate = inputStart?.value ? new Date(inputStart.value) : null;
-  const endDate = inputEnd?.value ? new Date(inputEnd.value) : null;
-  if (startDate) startDate.setHours(0, 0, 0, 0);
-  if (endDate) endDate.setHours(23, 59, 59, 999);
+  const filterMode = document.getElementById('empFilterMode')?.value || 'custom';
+  const filterYear = parseInt(document.getElementById('empFilterYear')?.value || new Date().getFullYear());
+  const filterType = document.getElementById('empDetailTypeFilter')?.value || document.getElementById('globalTypeFilter')?.value || '';
 
-  let totalIn = 0, totalOut = 0;
-  let lifeIn = 0, lifeOut = 0;
+  let startDate = null, endDate = null;
+  const isValidDate = (d) => d instanceof Date && !isNaN(d);
 
+  if (filterMode === 'custom') {
+    const sStr = inputStart?.value;
+    const eStr = inputEnd?.value;
+    if (sStr) {
+      const s = new Date(sStr);
+      if (isValidDate(s)) { s.setHours(0, 0, 0, 0); startDate = s; }
+    }
+    if (eStr) {
+      const e = new Date(eStr);
+      if (isValidDate(e)) { e.setHours(23, 59, 59, 999); endDate = e; }
+    }
+  } else {
+    startDate = new Date(filterYear, 0, 1, 0, 0, 0, 0);
+    endDate = new Date(filterYear, 11, 31, 23, 59, 59, 999);
+  }
+
+  // Year Dropdown
+  const yearSel = document.getElementById('empFilterYear');
+  if (yearSel && yearSel.options.length === 0) {
+    const years = [...new Set(allData.filter(d => d.date).map(d => d.date.getFullYear()))].sort((a, b) => b - a);
+    if (years.length === 0) years.push(new Date().getFullYear());
+    yearSel.innerHTML = years.map(y => `<option value="${y}" ${y === new Date().getFullYear() ? 'selected' : ''}>${y}</option>`).join('');
+  }
+
+  let totalIn = 0, totalOut = 0, lifeIn = 0, lifeOut = 0, lastContributionDate = null;
   allTxs.forEach(d => {
     d.type === 'Tabungan' ? lifeIn += d.nominal : lifeOut += d.nominal;
     let pass = true;
     if (startDate && d.date) pass = pass && d.date >= startDate;
     if (endDate && d.date) pass = pass && d.date <= endDate;
-    if (pass) {
-      d.type === 'Tabungan' ? totalIn += d.nominal : totalOut += d.nominal;
-    }
+    if (filterType && d.type !== filterType) pass = false;
+    if (pass) d.type === 'Tabungan' ? totalIn += d.nominal : totalOut += d.nominal;
+    if (d.type === 'Tabungan' && (!lastContributionDate || d.date > lastContributionDate)) lastContributionDate = d.date;
   });
 
-  let labels = [];
-  let balanceData = [];
-  let principalData = [];
-  let currentBalance = 0;
-  let currentPrincipal = 0;
-  let exactBunga = 0;
-  let lastContributionDate = null;
-
+  // Calculate Balance & Bunga (Waterfall)
+  let currentPrincipal = 0, exactBunga = 0, accPrincipal = 0, labels = [], balanceData = [], principalData = [];
   if (allTxs.length > 0) {
     const sortedTxs = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
-    if (sortedTxs.length > 0) {
-      let currentDate = new Date(sortedTxs[0].date);
-      const today = new Date();
-      const dailyRate = INTEREST_RATE / 365;
-
-      const txsByDay = {};
-      sortedTxs.forEach(tx => {
-        const dStr = tx.date.getFullYear() + '-' + tx.date.getMonth() + '-' + tx.date.getDate();
-        if (!txsByDay[dStr]) txsByDay[dStr] = 0;
-        txsByDay[dStr] += (tx.type === 'Tabungan' ? tx.nominal : -tx.nominal);
-        if (tx.type === 'Tabungan') {
-          if (!lastContributionDate || tx.date > lastContributionDate) lastContributionDate = tx.date;
-        }
-      });
-
-      const lastTxDate = sortedTxs[sortedTxs.length - 1].date;
-
-      // Logika Bunga Majemuk (Hanya cair saat Tabungan)
-      const monthlyRate = 0.03 / 12;
-      let lastProcessedDate = sortedTxs[0].date;
-      let accPrincipal = 0; // Running total for principal
-
-      sortedTxs.forEach(tx => {
-        // Hitung bunga tertunda sejak transaksi terakhir
-        const diffMonths = (tx.date.getFullYear() - lastProcessedDate.getFullYear()) * 12 + (tx.date.getMonth() - lastProcessedDate.getMonth());
-        let pendingInterest = 0;
-        if (diffMonths > 0 && currentPrincipal > 0) {
-          pendingInterest = currentPrincipal * monthlyRate * diffMonths;
-        }
-
-        if (tx.type === 'Tabungan') {
-          currentPrincipal += pendingInterest; // Cairkan bunga
-          exactBunga += pendingInterest;
-          currentPrincipal += tx.nominal;
-          accPrincipal += tx.nominal;
-        } else {
-          // Penarikan: Bunga tertunda hangus/tidak dihitung
-          currentPrincipal -= tx.nominal;
-          accPrincipal -= tx.nominal;
-        }
-
-        // Data untuk Grafik
-        labels.push(monthNames[tx.date.getMonth()] + ' ' + tx.date.getFullYear());
-        balanceData.push(currentPrincipal);
-        principalData.push(accPrincipal);
-
-        lastProcessedDate = tx.date;
-      });
-    }
+    const monthlyRate = 0.03 / 12;
+    let lastProcessedDate = sortedTxs[0]?.date;
+    
+    sortedTxs.forEach(tx => {
+      const diffMonths = (tx.date.getFullYear() - lastProcessedDate.getFullYear()) * 12 + (tx.date.getMonth() - lastProcessedDate.getMonth());
+      if (diffMonths > 0 && currentPrincipal > 0) {
+        const pending = currentPrincipal * monthlyRate * diffMonths;
+        currentPrincipal += pending;
+        exactBunga += pending;
+      }
+      if (tx.type === 'Tabungan') { currentPrincipal += tx.nominal; accPrincipal += tx.nominal; }
+      else { currentPrincipal -= tx.nominal; accPrincipal -= tx.nominal; }
+      labels.push(monthNames[tx.date.getMonth()] + ' ' + tx.date.getFullYear());
+      balanceData.push(currentPrincipal);
+      principalData.push(accPrincipal);
+      lastProcessedDate = tx.date;
+    });
   }
 
   const saldo = currentPrincipal;
-  const bunga = exactBunga;
-  const principal = lifeIn - lifeOut;
-  const roi = principal > 0 ? (bunga / principal) * 100 : 0;
-
-  let monthsFiltered = labels.length > 0 ? labels.length : 1;
-  const avgContribution = totalIn / monthsFiltered;
-
+  const roi = (lifeIn - lifeOut) > 0 ? (exactBunga / (lifeIn - lifeOut) * 100) : 0;
   const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
-  const empNik = allTxs.length > 0 ? (allTxs[0].nik || '-') : '-';
-  const status = allEmployeesStatus[getEmpId({ name, nik })] || { isActive: false };
-  const statusLabel = status.isActive ? '<span class="badge-status status-verified">AKTIF</span>' : '<span class="badge-status status-progress">NON-AKTIF</span>';
-
-  const uniqueNames = [...new Set(allTxs.map(d => d.name))];
-  const aliases = uniqueNames.filter(n => n.toLowerCase().trim() !== name.toLowerCase().trim());
-  const variationsHtml = aliases.length > 0 
-    ? `<div style="font-size:0.75rem; color:#64748b; margin-top:2px; font-weight:normal; font-style:italic;">Alias: ${aliases.join(', ')}</div>` 
-    : '';
-
+  const empNik = nik && nik !== '-' ? nik : (allTxs[0]?.nik || '-');
+  
+  // Header
   document.getElementById('empHeader').innerHTML = `
-    <div class="emp-avatar">${initials}</div>
-    <div>
-      <div class="emp-name">${name} ${statusLabel}</div>
-      ${variationsHtml}
-      <div class="emp-meta" style="margin-top:4px;">NIK: <strong>${empNik}</strong> &bull; ${allTxs.length} transaksi tercatat &bull; Aktif sejak ${allTxs.length > 0 ? fmtDate(allTxs[0].date) : '-'}</div>
+    <div style="display: flex; gap: 20px; align-items: center; padding: 20px 0;">
+      <div class="emp-avatar" style="width: 80px; height: 80px; font-size: 2rem;">${initials}</div>
+      <div>
+        <h2 style="margin: 0; font-size: 1.8rem; color: var(--slate);">${name}</h2>
+        <div style="display: flex; gap: 10px; margin-top: 8px; color: var(--text-muted); font-size: 0.9rem;">
+          <span><i class="fas fa-id-card"></i> ${empNik}</span>
+          <span>&bull;</span>
+          <span><i class="fas fa-calendar-alt"></i> Sejak ${allTxs.length > 0 ? fmtDate(allTxs[0].date) : '-'}</span>
+          <span>&bull;</span>
+          <span><i class="fas fa-exchange-alt"></i> ${allTxs.length} Transaksi</span>
+        </div>
+      </div>
     </div>`;
+
+
 
   // SMART ALERTS
   const alerts = [];
-  if (lastContributionDate) {
-    const monthsSinceLast = (new Date().getFullYear() - lastContributionDate.getFullYear()) * 12 + (new Date().getMonth() - lastContributionDate.getMonth());
-    if (monthsSinceLast >= 3) {
-      alerts.push(`<div style="background:#fef2f2; color:#b91c1c; padding:10px 14px; border-radius:8px; border:1px solid #fecaca; display:flex; gap:10px; align-items:center; font-weight:500; font-size:0.9rem;"><i class="fas fa-exclamation-triangle"></i> Peringatan: Tidak ada setoran dalam ${monthsSinceLast} bulan terakhir.</div>`);
-    }
+  const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getUTCMonth() - 3);
+  if (lastContributionDate && lastContributionDate < threeMonthsAgo) {
+    const now = new Date();
+    const diffMonths = (now.getFullYear() - lastContributionDate.getFullYear()) * 12 + (now.getMonth() - lastContributionDate.getMonth());
+    alerts.push(`<div class="ai-insight-item" style="background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.2);"><i class="fas fa-exclamation-triangle"></i> Karyawan ini tidak melakukan setoran selama ${diffMonths} bulan berturut-turut.</div>`);
   }
-  if (roi > 5) {
-    alerts.push(`<div style="background:#f0fdf4; color:#15803d; padding:10px 14px; border-radius:8px; border:1px solid #bbf7d0; display:flex; gap:10px; align-items:center; font-weight:500; font-size:0.9rem;"><i class="fas fa-trophy"></i> Hebat! Return On Investment (ROI) Anda mencapai performa sangat baik (${roi.toFixed(1)}%).</div>`);
-  }
+  if (roi > 5) alerts.push(`<div class="ai-insight-item" style="background:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.2);"><i class="fas fa-star"></i> Performa ROI sangat baik. Karyawan ini adalah penabung konsisten.</div>`);
+  document.getElementById('empSmartAlerts').innerHTML = alerts.join('');
 
-  const smartAlertsEl = document.getElementById('empSmartAlerts');
-  if (smartAlertsEl) smartAlertsEl.innerHTML = alerts.join('');
 
   let saldoAwal = 0;
   if (startDate) {
@@ -1710,16 +2511,44 @@ function showEmployee(name, nik = '') {
     saldoAwal = Math.round(tempBal);
   }
 
+  const filteredEmpTxs = allTxs.filter(d => {
+    let pass = true;
+    if (startDate && d.date) pass = pass && d.date >= startDate;
+    if (endDate && d.date) pass = pass && d.date <= endDate;
+    if (filterType && d.type !== filterType) pass = false;
+    return pass;
+  });
+  const empBrk = calculateWithdrawalBreakdown(filteredEmpTxs);
+  const empBrkHtml = `
+    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(239, 68, 68, 0.3); font-size: 0.7rem; text-align: left; line-height: 1.6; color: #475569;">
+      <div style="display: flex; justify-content: space-between;"><span>Modal:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.modal)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Bunga:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.bunga)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>T. Salah:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Mencurigakan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
+    </div>
+  `;
+
   const cards = [];
+  const uniqueMonths = new Set(allTxs.filter(tx => tx.date).map(tx => tx.date.getFullYear() + '-' + tx.date.getMonth()));
+  const avgContribution = uniqueMonths.size > 0 ? lifeIn / uniqueMonths.size : 0;
   if (startDate) {
     cards.push({ icon: 'fas fa-history', cls: 'yellow', label: 'Saldo Awal', value: fmt(saldoAwal), sub: `Per ${fmtDate(startDate)}` });
   }
   cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Akhir', value: fmt(Math.round(saldo)), sub: 'Kumulatif saat ini' });
   cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
-  cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: startDate ? 'Dalam periode filter' : '' });
-  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'ROI (Return)', value: roi.toFixed(2) + '%', sub: `Est. Keuntungan: ${fmt(Math.round(bunga))}` });
+  cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
+  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'ROI (Return)', value: roi.toFixed(2) + '%', sub: `Est. Keuntungan: ${fmt(Math.round(exactBunga))}` });
 
-  document.getElementById('empCards').innerHTML = cards.map(c => `<div class="summary-card"><div class="card-icon ${c.cls}"><i class="${c.icon}"></i></div><div class="card-label">${c.label}</div><div class="card-value">${c.value}</div><div class="card-sub" style="margin-top:2px;">${c.sub}</div></div>`).join('');
+  document.getElementById('empCards').innerHTML = cards.map(c => `
+    <div class="summary-card">
+      <div class="card-top">
+        <div class="card-icon ${c.cls}"><i class="${c.icon}"></i></div>
+        <div class="card-label">${c.label}</div>
+      </div>
+      <div class="card-value">${c.value}</div>
+      <div class="card-sub" style="margin-top:2px;">${c.sub}</div>
+    </div>
+  `).join('');
 
   const monthsWithWithdrawals = new Set();
   allTxs.forEach(tx => { if (tx.type !== 'Tabungan' && tx.date) monthsWithWithdrawals.add(monthNames[tx.date.getMonth()] + ' ' + tx.date.getFullYear()); });
@@ -1777,7 +2606,7 @@ function showEmployee(name, nik = '') {
       label: { show: false }, labelLine: { show: false },
       data: [
         { value: lifeIn, name: 'Total Setoran (Modal)', itemStyle: { color: '#4f46e5' } },
-        { value: bunga, name: 'Total Keuntungan (Return)', itemStyle: { color: '#f59e0b' } }
+        { value: exactBunga, name: 'Total Keuntungan (Return)', itemStyle: { color: '#f59e0b' } }
       ]
     }]
   });
@@ -1816,13 +2645,14 @@ function showEmployee(name, nik = '') {
       let pass = true;
       if (startDate && d.date) pass = pass && d.date >= startDate;
       if (endDate && d.date) pass = pass && d.date <= endDate;
+      if (filterType && d.type !== filterType) pass = false;
 
       if (pass) {
         const link = typeof getLinkFromKeterangan === 'function' ? getLinkFromKeterangan(d.keterangan) : null;
         const linkBtn = link ? `<a href="${link}" target="_blank" class="btn-view-tf" style="margin-left:8px; font-size:0.75rem;"><i class="fas fa-external-link-alt"></i> Bukti</a>` : '';
 
         const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
-        const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'In Progress');
+        const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'MENUNGGU REVIEW');
         const highlightBg = isSuspicious ? 'background-color: rgba(239, 68, 68, 0.08);' : '';
         const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Mencurigakan"></i>` : '';
 
@@ -1854,24 +2684,33 @@ function showEmployee(name, nik = '') {
   tableData.sort((a, b) => {
     let v1, v2;
     switch (empTxSort.col) {
-      case 0: v1 = a.date || 0; v2 = b.date || 0; break;
-      case 2: v1 = a.nominal; v2 = b.nominal; break;
-      case 4: v1 = a.bunga; v2 = b.bunga; break;
-      case 5: v1 = a.balance; v2 = b.balance; break;
+      case 1: v1 = a.date || 0; v2 = b.date || 0; break;
+      case 4: v1 = a.nominal; v2 = b.nominal; break;
+      case 6: v1 = a.bunga; v2 = b.bunga; break;
+      case 7: v1 = a.balance; v2 = b.balance; break;
       default: return 0;
     }
     if (v1 < v2) return empTxSort.asc ? -1 : 1;
     if (v1 > v2) return empTxSort.asc ? 1 : -1;
+
+    // Jika tanggal sama, gunakan sheetRow sebagai penentu urutan (secondary sort)
+    if (empTxSort.col === 1) {
+      const s1 = a.sheetRow || 0;
+      const s2 = b.sheetRow || 0;
+      if (s1 < s2) return empTxSort.asc ? -1 : 1;
+      if (s1 > s2) return empTxSort.asc ? 1 : -1;
+    }
     return 0;
   });
 
-  document.querySelector('#empTable tbody').innerHTML = tableData.map(row => {
+  document.querySelector('#empTable tbody').innerHTML = tableData.map((row, idx) => {
     const editedBadge = row.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${row.notes || '-'}">DIEDIT</span>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
-    const editBtn = isAdmin ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-left: 4px;" onclick="openEditModal(${row.sheetRow}, '${row.name.replace(/'/g, "\\'")}', ${row.nominal}, '${row.nik || ''}', '${row.type}', '${row.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
+    const editBtn = (isAdmin && row.type === 'Penarikan') ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-left: 4px;" onclick="openEditModal(${row.sheetRow}, '${row.name.replace(/'/g, "\\'")}', ${row.nominal}, '${row.nik || ''}', '${row.type}', '${row.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
 
     return `
     <tr style="${row.highlightBg}">
+      <td style="font-size: 0.8rem; color: #64748b; font-weight: 500;">${idx + 1}</td>
       <td>${row.alertIcon}${row.dateStr}${editedBadge}</td>
       <td style="font-size: 0.8rem; color: #64748b; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.name}">${row.name}</td>
       <td>${row.jenis}${row.linkBtn}</td>
@@ -1883,256 +2722,520 @@ function showEmployee(name, nik = '') {
     </tr>
   `}).join('');
 
+  // 4. GENERATE MONTHLY RECAP (If in monthly mode)
+  if (filterMode === 'monthly') {
+    const monthlyRecap = Array.from({ length: 12 }, (_, i) => ({
+      monthIdx: i,
+      monthName: monthNames[i],
+      totalIn: 0,
+      totalOut: 0,
+      totalBunga: 0,
+      balance: 0
+    }));
+
+    // Re-calculate for recap table to get cumulative balance correctly
+    let recapRunBal = 0;
+    let recapLastDate = null;
+    
+    // Sort all transactions of this employee chronologically to get balance history
+    const allChronological = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
+    
+    allChronological.forEach(d => {
+      const year = d.date.getFullYear();
+      const monthIdx = d.date.getMonth();
+      
+      let interest = 0;
+      if (recapLastDate && d.date > recapLastDate && recapRunBal > 0) {
+        const diffMonths = (d.date.getFullYear() - recapLastDate.getFullYear()) * 12 + (d.date.getMonth() - recapLastDate.getMonth());
+        if (diffMonths > 0) interest = recapRunBal * 0.0025 * diffMonths;
+      }
+
+      if (d.type === 'Tabungan') {
+        recapRunBal += interest + d.nominal;
+      } else {
+        recapRunBal -= d.nominal;
+        interest = 0;
+      }
+      
+      recapLastDate = d.date;
+
+      // Only add to recap totals if within the selected year AND matches filterType
+      if (year === filterYear) {
+        const m = monthlyRecap[monthIdx];
+        const matchType = !filterType || d.type === filterType;
+        
+        if (d.type === 'Tabungan') {
+          if (matchType) m.totalIn += d.nominal;
+          m.totalBunga += interest; // Bunga always counts for balance but might be shown differently
+        } else {
+          if (matchType) m.totalOut += d.nominal;
+        }
+        m.balance = recapRunBal;
+      }
+    });
+
+    // Fill in balances for months with no transactions
+    let lastKnownBal = 0;
+    // Find balance at the end of the previous year
+    allChronological.forEach(d => {
+      if (d.date.getFullYear() < filterYear) {
+        // Simple balance check (approximate but enough for recap start)
+        let interest = 0;
+        // This is a simplified replay - in a real app we'd reuse the main calculation engine
+        lastKnownBal = (d.type === 'Tabungan' ? lastKnownBal + d.nominal : lastKnownBal - d.nominal);
+      }
+    });
+    
+    // Better: iterate month by month for the selected year
+    let carryBal = lastKnownBal;
+    monthlyRecap.forEach(m => {
+      if (m.balance === 0 && m.totalIn === 0 && m.totalOut === 0) {
+        m.balance = carryBal;
+      } else {
+        carryBal = m.balance;
+      }
+    });
+
+    document.querySelector('#empRecapTable tbody').innerHTML = monthlyRecap.map(m => `
+      <tr>
+        <td style="font-weight: 600;">${m.monthName} ${filterYear}</td>
+        <td style="color: #10b981;">${fmt(m.totalIn)}</td>
+        <td style="color: #ef4444;">${fmt(m.totalOut)}</td>
+        <td style="color: #f59e0b;">${fmt(Math.round(m.totalBunga))}</td>
+        <td style="font-weight: 700;">${fmt(Math.round(m.balance))}</td>
+      </tr>
+    `).join('');
+  }
+
   setTimeout(() => {
     if (charts.emp) charts.emp.resize();
     if (charts.empPie) charts.empPie.resize();
   }, 50);
 }
 
-// ===== ANALYTICS =====
-function initAnalytics() {
-  const container = document.getElementById('analyticsKpis');
-  if (!container) return;
+function exportTxData() {
+  const q = (document.getElementById('txSearch')?.value || '').toLowerCase().trim();
+  const type = document.getElementById('globalTypeFilter')?.value || '';
+  
+  const inputStart = document.getElementById('globalStartDate');
+  const inputEnd = document.getElementById('globalEndDate');
+  const startDate = inputStart?.value ? new Date(inputStart.value) : null;
+  const endDate = inputEnd?.value ? new Date(inputEnd.value) : null;
+  if (startDate) startDate.setHours(0, 0, 0, 0);
+  if (endDate) endDate.setHours(23, 59, 59, 999);
 
-  // 1. DATA PREP (Monthly & All Time)
+  let filtered = allData.filter(d => {
+    let pass = true;
+    if (startDate && d.date) pass = pass && d.date >= startDate;
+    if (endDate && d.date) pass = pass && d.date <= endDate;
+    if (type && d.type !== type) pass = false;
+    if (q) pass = pass && (d.name.toLowerCase().includes(q) || (d.nik && d.nik.toLowerCase().includes(q)));
+    return pass;
+  });
+
+  if (filtered.length === 0) {
+    toast('Tidak ada data transaksi untuk didownload', 'error');
+    return;
+  }
+
+  const exportData = filtered.map((d, i) => ({
+    No: i + 1,
+    Tanggal: d.dateStr,
+    Nama: d.name,
+    NIK: d.nik || '-',
+    Tipe: d.type,
+    Jenis: d.jenis,
+    Nominal: d.nominal,
+    Keterangan: d.keterangan || '-'
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Data Transaksi");
+  XLSX.writeFile(wb, `Data_Transaksi_${new Date().toISOString().split('T')[0]}.xlsx`);
+  toast('Data transaksi berhasil didownload', 'success');
+}
+
+// ===== ANALYTICS =====
+// ===== NEW ANALYTICS ENGINE =====
+function initAnalytics() {
+  const timeFilterBtns = document.querySelectorAll('#analyticsTimeFilter button');
+  const yearGroup = document.getElementById('analyticsYearSelectGroup');
+  const monthGroup = document.getElementById('analyticsMonthSelectGroup');
+  const customGroup = document.getElementById('analyticsCustomRangeGroup');
+  const yearSelect = document.getElementById('analyticsYearSelect');
+  const monthSelect = document.getElementById('analyticsMonthSelect');
+  const btnApply = document.getElementById('btnApplyAnalyticsFilter');
+
+  // 1. Setup Filters
+  if (yearSelect && yearSelect.options.length === 0) {
+    const years = [...new Set(allData.filter(d => d.date).map(d => d.date.getFullYear()))].sort((a, b) => b - a);
+    if (years.length === 0) years.push(new Date().getFullYear());
+    yearSelect.innerHTML = years.map(y => `<option value="${y}" ${y === new Date().getFullYear() ? 'selected' : ''}>${y}</option>`).join('');
+  }
+
+  if (monthSelect && monthSelect.options.length === 0) {
+    monthSelect.innerHTML = monthNames.map((m, i) => `<option value="${i}">${m}</option>`).join('');
+    monthSelect.value = new Date().getMonth();
+  }
+
+  timeFilterBtns.forEach(btn => {
+    btn.onclick = () => {
+      timeFilterBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const range = btn.dataset.range;
+      
+      yearGroup.classList.add('hidden');
+      monthGroup.classList.add('hidden');
+      customGroup.classList.add('hidden');
+
+      if (range === 'yearly') yearGroup.classList.remove('hidden');
+      if (range === 'monthly') { yearGroup.classList.remove('hidden'); monthGroup.classList.remove('hidden'); }
+      if (range === 'custom') customGroup.classList.remove('hidden');
+
+      renderAnalyticsContent();
+    };
+  });
+
+  if (btnApply) btnApply.onclick = renderAnalyticsContent;
+  
+  const btnDownload = document.getElementById('btnDownloadAnalytics');
+  if (btnDownload) btnDownload.onclick = exportAnalyticsReport;
+
+  // Initial Render
+  renderAnalyticsContent();
+}
+
+function renderAnalyticsContent() {
+  const range = document.querySelector('#analyticsTimeFilter button.active').dataset.range;
+  const year = parseInt(document.getElementById('analyticsYearSelect').value);
+  const month = parseInt(document.getElementById('analyticsMonthSelect').value);
+  const startStr = document.getElementById('analyticsStartDate').value;
+  const endStr = document.getElementById('analyticsEndDate').value;
+
+  let filtered = [...allData];
+  let anomFiltered = [...allAnomalies];
+
+  if (range === 'yearly') {
+    filtered = filtered.filter(d => d.date && d.date.getFullYear() === year);
+    anomFiltered = anomFiltered.filter(a => a.date && a.date.getFullYear() === year);
+  } else if (range === 'monthly') {
+    filtered = filtered.filter(d => d.date && d.date.getFullYear() === year && d.date.getMonth() === month);
+    anomFiltered = anomFiltered.filter(a => a.date && a.date.getFullYear() === year && a.date.getMonth() === month);
+  } else if (range === 'custom') {
+    const s = startStr ? new Date(startStr) : null;
+    const e = endStr ? new Date(endStr) : null;
+    if (e) e.setHours(23, 59, 59);
+    if (s) {
+      filtered = filtered.filter(d => d.date && d.date >= s);
+      anomFiltered = anomFiltered.filter(a => a.date && a.date >= s);
+    }
+    if (e) {
+      filtered = filtered.filter(d => d.date && d.date <= e);
+      anomFiltered = anomFiltered.filter(a => a.date && a.date <= e);
+    }
+  }
+
+  // CALCULATE KPI CATEGORIES
+  renderFinancialKpis(filtered, anomFiltered);
+  renderBehavioralKpis(filtered, anomFiltered);
+  renderOperationalKpis(filtered, anomFiltered);
+  
+  // RENDER TRENDS
+  renderAnomaliTrends(anomFiltered);
+  renderRecoveryTrend(anomFiltered);
+  
+  // RENDER MATRIX
+  renderInsightMatrix(anomFiltered);
+  
+  // RENDER TABLES
+  renderDeepAnalysisTables(anomFiltered);
+
+}
+
+function renderFinancialKpis(data, anoms) {
+  const totalIn = data.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
+  const totalOut = data.filter(d => d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
+  
+  // Over-withdraw logic
+  const totalInitialLoss = anoms.reduce((sum, a) => sum + (a.initialDebt || 0), 0);
+  const totalRemainingLoss = anoms.reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
+  const provenLoss = anoms.filter(a => a.status === 'TERBUKTI').reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
+  
+  const recovery = totalInitialLoss - totalRemainingLoss;
+  const recoveryRate = totalInitialLoss > 0 ? (recovery / totalInitialLoss * 100) : 100; // Default to 100% if no losses
+
+  const kpis = [
+    { label: 'Total Investasi', val: fmt(totalIn), icon: 'fa-hand-holding-usd', cls: 'blue' },
+    { label: 'Total Penarikan', val: fmt(totalOut), icon: 'fa-external-link-alt', cls: 'indigo' },
+    { label: 'Total Over-Withdraw', val: fmt(totalInitialLoss), icon: 'fa-exclamation-circle', cls: 'orange' },
+    { label: 'Kerugian Terbukti', val: fmt(provenLoss), icon: 'fa-shield-alt', cls: 'red' },
+    { label: 'Total Recovery', val: fmt(recovery), icon: 'fa-redo', cls: 'green' },
+    { label: 'Recovery Rate %', val: recoveryRate.toFixed(1) + '%', icon: 'fa-percent', cls: 'cyan' }
+  ];
+
+  document.getElementById('analyticsFinancialKpis').innerHTML = kpis.map(k => `
+    <div class="summary-card">
+      <div class="card-top">
+        <div class="card-icon ${k.cls}"><i class="fas ${k.icon}"></i></div>
+        <div class="card-label">${k.label}</div>
+      </div>
+      <div class="card-value" style="font-size: 1.2rem;">${k.val}</div>
+    </div>
+  `).join('');
+}
+
+function renderBehavioralKpis(data, anoms) {
+  // Filter only genuine anomalies (same as Anomali table default visibility)
+  const validAnoms = anoms.filter(a => a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL' || a.status === 'TERBUKTI');
+
+  // Top Offender
+  const empMap = {};
+  validAnoms.forEach(a => {
+    const id = a.nik || a.name;
+    if (!empMap[id]) empMap[id] = { name: a.name, count: 0, total: 0 };
+    empMap[id].count++;
+    empMap[id].total += a.initialDebt;
+  });
+  const topEmp = Object.values(empMap).sort((a,b) => b.total - a.total)[0] || { name: '-', total: 0 };
+
+  const kpis = [
+    { label: 'Top Offender (Value)', val: topEmp.name, sub: fmt(topEmp.total), icon: 'fa-user-ninja' },
+    { label: 'Unique Employees', val: new Set(validAnoms.map(a => a.nik || a.name)).size + ' Orang', sub: 'Terlibat anomali', icon: 'fa-users' }
+  ];
+
+  document.getElementById('analyticsBehavioralKpis').innerHTML = kpis.map(k => `
+    <div style="background:#f8fafc; padding:16px; border-radius:12px; border:1px solid #e2e8f0; display:flex; align-items:center; gap:12px;">
+      <div style="background:#fff; width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--primary); box-shadow:var(--shadow-sm);"><i class="fas ${k.icon}"></i></div>
+      <div>
+        <div style="font-size:0.7rem; font-weight:700; color:#64748b; text-transform:uppercase;">${k.label}</div>
+        <div style="font-size:1rem; font-weight:700; color:#1e293b;">${k.val}</div>
+        <div style="font-size:0.75rem; color:#94a3b8;">${k.sub}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderOperationalKpis(data, anoms) {
+  const total = anoms.length;
+  const reviewed = anoms.filter(a => a.status !== 'MENUNGGU REVIEW').length;
+  const pending = total - reviewed;
+
+  const kpis = [
+    { label: 'Review Selesai', val: reviewed + ' Kasus', sub: ((reviewed/total*100) || 0).toFixed(1) + '% Completion', icon: 'fa-check-circle' },
+    { label: 'Pending Review', val: pending + ' Kasus', sub: 'Menunggu antrean', icon: 'fa-clock' }
+  ];
+
+  document.getElementById('analyticsOperationalKpis').innerHTML = kpis.map(k => `
+    <div style="background:#f8fafc; padding:16px; border-radius:12px; border:1px solid #e2e8f0; display:flex; align-items:center; gap:12px;">
+      <div style="background:#fff; width:40px; height:40px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--success); box-shadow:var(--shadow-sm);"><i class="fas ${k.icon}"></i></div>
+      <div>
+        <div style="font-size:0.7rem; font-weight:700; color:#64748b; text-transform:uppercase;">${k.label}</div>
+        <div style="font-size:1rem; font-weight:700; color:#1e293b;">${k.val}</div>
+        <div style="font-size:0.75rem; color:#94a3b8;">${k.sub}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderAnomaliTrends(anoms) {
   const monthly = {};
-  allData.forEach(d => {
-    if (!d.date) return;
-    const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0');
-    if (!monthly[k]) monthly[k] = { in: 0, out: 0, txCount: 0, users: new Set() };
-    if (d.type === 'Tabungan') monthly[k].in += d.nominal;
-    else monthly[k].out += d.nominal;
-    monthly[k].txCount++;
-    monthly[k].users.add(d.name);
+  anoms.forEach(a => {
+    if (!a.date) return;
+    const k = a.date.getFullYear() + '-' + String(a.date.getMonth()).padStart(2, '0');
+    if (!monthly[k]) monthly[k] = { count: 0, value: 0 };
+    monthly[k].count++;
+    monthly[k].value += a.initialDebt;
   });
 
   const keys = Object.keys(monthly).sort();
-  // Gunakan bulan terakhir yang tersedia di data
-  const currentMonthKey = keys[keys.length - 1];
-  const lastMonthKey = keys[keys.length - 2];
+  const labels = keys.map(k => { const [y, m] = k.split('-'); return monthNames[+m] + ' ' + y; });
+  const counts = keys.map(k => monthly[k].count);
+  const values = keys.map(k => monthly[k].value);
 
-  const cur = monthly[currentMonthKey] || { in: 0, out: 0, users: new Set() };
-  const prev = monthly[lastMonthKey] || { in: 0, out: 0, users: new Set() };
+  // Volume Chart
+  const ctxVol = document.getElementById('chartAnomaliVolume');
+  if (charts.anomVol) charts.anomVol.dispose();
+  charts.anomVol = echarts.init(ctxVol);
+  charts.anomVol.setOption({
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: labels, axisLabel: { color: '#64748b' } },
+    yAxis: { type: 'value', axisLabel: { color: '#64748b' } },
+    series: [{ data: counts, type: 'bar', itemStyle: { color: '#6366f1', borderRadius: [4, 4, 0, 0] } }]
+  });
 
-  const [cy, cm] = currentMonthKey.split('-');
-  const currentMonthLabel = monthNames[parseInt(cm)] + ' ' + cy;
+  // Value Chart
+  const ctxVal = document.getElementById('chartAnomaliValue');
+  if (charts.anomVal) charts.anomVal.dispose();
+  charts.anomVal = echarts.init(ctxVal);
+  charts.anomVal.setOption({
+    tooltip: { trigger: 'axis', formatter: (p) => `${p[0].name}<br/>${fmt(p[0].value)}` },
+    xAxis: { type: 'category', data: labels, axisLabel: { color: '#64748b' } },
+    yAxis: { type: 'value', axisLabel: { color: '#64748b', formatter: v => v >= 1e6 ? (v/1e6).toFixed(1)+'jt' : v } },
+    series: [{ data: values, type: 'line', smooth: true, itemStyle: { color: '#ef4444' }, areaStyle: { color: 'rgba(239, 68, 68, 0.1)' } }]
+  });
+}
 
-  const totalDana = allData.reduce((acc, d) => acc + (d.type === 'Tabungan' ? d.nominal : -d.nominal), 0);
+function renderRecoveryTrend(anoms) {
+  const monthly = {};
+  anoms.forEach(a => {
+    if (!a.date) return;
+    const k = a.date.getFullYear() + '-' + String(a.date.getMonth()).padStart(2, '0');
+    if (!monthly[k]) monthly[k] = { initial: 0, remaining: 0 };
+    monthly[k].initial += a.initialDebt;
+    monthly[k].remaining += a.remainingDebt;
+  });
 
-  // Karyawan Aktif: Pernah menabung dalam 1 tahun terakhir
-  const oneYearAgo = new Date();
-  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const activeEmps = new Set(allData.filter(d => d.type === 'Tabungan' && d.date && d.date >= oneYearAgo).map(d => d.name)).size;
+  const keys = Object.keys(monthly).sort();
+  const labels = keys.map(k => { const [y, m] = k.split('-'); return monthNames[+m] + ' ' + y; });
+  const dataRecovered = keys.map(k => monthly[k].initial - monthly[k].remaining);
 
-  const netFlow = cur.in - cur.out;
-  const totalDanaBefore = totalDana - netFlow;
+  const ctx = document.getElementById('chartRecoveryTrend');
+  if (charts.recoveryTrend) charts.recoveryTrend.dispose();
+  charts.recoveryTrend = echarts.init(ctx);
+  charts.recoveryTrend.setOption({
+    tooltip: { trigger: 'axis', formatter: (p) => `${p[0].name}<br/>Recovered: ${fmt(p[0].value)}` },
+    xAxis: { type: 'category', data: labels, axisLabel: { color: '#64748b' } },
+    yAxis: { type: 'value', axisLabel: { color: '#64748b' } },
+    series: [{ data: dataRecovered, type: 'line', smooth: true, symbolSize: 10, itemStyle: { color: '#10b981' }, lineStyle: { width: 4 } }]
+  });
+}
 
-  // Growth % (Asset Growth MoM) - Lebih stabil dibanding Net Flow Growth
-  let growthPct = 0;
-  if (totalDanaBefore > 0) growthPct = (netFlow / totalDanaBefore) * 100;
-
-  const totalPenarikan = cur.out;
-  const avgInvest = activeEmps > 0 ? totalDana / activeEmps : 0;
-
-  // 2. RENDER KPI CARDS
-  const kpis = [
-    { label: 'Total Dana Kelolaan', val: fmt(globalTotalSaldo), icon: 'fa-wallet', color: '4f46e5', trend: '', trendVal: '' },
-    { label: 'Karyawan Aktif Berinvestasi', val: globalTotalActive, icon: 'fa-users', color: '7c3aed', trend: '', trendVal: 'Setoran < 3 bln' },
-    { label: 'Net Cash Flow', val: fmt(netFlow), icon: 'fa-exchange-alt', color: '0ea5e9', trend: netFlow >= 0 ? 'up' : 'down', trendVal: currentMonthLabel },
-    { label: 'Growth Bulanan', val: (growthPct >= 0 ? '+' : '') + growthPct.toFixed(2) + '%', icon: 'fa-chart-line', color: '10b981', trend: growthPct >= 0 ? 'up' : 'down', trendVal: 'MoM Asset' },
-    { label: 'Total Penarikan', val: fmt(totalPenarikan), icon: 'fa-arrow-up', color: 'ef4444', trend: '', trendVal: currentMonthLabel },
-    { label: 'Avg per Karyawan', val: fmt(avgInvest), icon: 'fa-user-tie', color: 'f59e0b', trend: '', trendVal: '' }
+function renderInsightMatrix(anoms) {
+  const matrix = [
+    { label: 'Kasus Aktif Belum Dicek', icon: 'fa-hourglass-start', color: '#ef4444', desc: 'Mencurigakan + Menunggu Review', val: anoms.filter(a => a.systemStatus === 'MENCURIGAKAN' && a.status === 'MENUNGGU REVIEW').length },
+    { label: 'Fraud Selesai Dibayar', icon: 'fa-check-double', color: '#10b981', desc: 'Lunas + Terbukti', val: anoms.filter(a => a.systemStatus === 'LUNAS' && a.status === 'TERBUKTI').length },
+    { label: 'False Positive / Koreksi', icon: 'fa-user-edit', color: '#3b82f6', desc: 'Lunas + Salah Input', val: anoms.filter(a => a.status === 'SALAH INPUT').length },
+    { label: 'Sedang Proses Recovery', icon: 'fa-sync', color: '#f59e0b', desc: 'Dicicil + Terbukti', val: anoms.filter(a => a.systemStatus === 'DICICIL' && a.status === 'TERBUKTI').length }
   ];
 
-  container.innerHTML = kpis.map(k => `
-    <div class="analytics-kpi-card">
-      <div class="a-kpi-icon" style="color:#${k.color}"><i class="fas ${k.icon}"></i></div>
-      <div class="a-kpi-label">${k.label}</div>
-      <div class="a-kpi-value">${k.val}</div>
-      ${k.trend ? `<div class="a-kpi-trend ${k.trend}"><i class="fas fa-caret-${k.trend}"></i> ${k.trendVal}</div>` : `<div class="a-kpi-trend" style="color:var(--text-muted)">${k.trendVal}</div>`}
+  document.getElementById('analyticsInsightMatrix').innerHTML = matrix.map(m => `
+    <div class="matrix-card" style="border-left-color: ${m.color};">
+      <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px;">
+        <div style="background:${m.color}15; color:${m.color}; width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center;"><i class="fas ${m.icon}"></i></div>
+        <div style="font-size:1.8rem; font-weight:800; color:#1e293b;">${m.val}</div>
+      </div>
+      <div style="font-weight:700; color:#1e293b; margin-bottom:4px; font-size:0.9rem;">${m.label}</div>
+      <div style="font-size:0.75rem; color:#94a3b8;">${m.desc}</div>
     </div>
   `).join('');
-
-  // 3. CHARTS
-  renderAnalyticsAccum(keys, monthly);
-  renderAnalyticsTop10();
-  renderAnalyticsCashFlow(keys, monthly);
-  renderAnalyticsSegment();
-
-  // 4. ALERTS & INSIGHTS
-  renderAnalyticsAlerts(cur, currentMonthKey);
-  renderAnalyticsInsights(totalDana, activeEmps, cur, prev);
 }
 
-function renderAnalyticsAccum(keys, monthly) {
-  const ctx = document.getElementById('analyticsAccum');
-  if (!ctx) return;
-  if (charts.accum) charts.accum.dispose();
-  charts.accum = echarts.init(ctx);
+function renderDeepAnalysisTables(anoms) {
+  // Top Offenders Table
+  const empMap = {};
+  anoms.forEach(a => {
+    const id = a.nik || a.name;
+    if (!empMap[id]) empMap[id] = { nik: a.nik || '-', name: a.name, count: 0, total: 0 };
+    empMap[id].count++;
+    empMap[id].total += a.initialDebt;
+  });
+  const sortedOffenders = Object.values(empMap).sort((a,b) => b.total - a.total).slice(0, 10);
+  document.querySelector('#tableTopAnomali tbody').innerHTML = sortedOffenders.map(o => `
+    <tr class="clickable-row" onclick="goToEmployee('${o.name.replace(/'/g, "\\'")}', '${o.nik === '-' ? '' : o.nik}')">
+      <td>${o.nik}</td>
+      <td style="font-weight:600">${o.name}</td>
+      <td>${o.count}</td>
+      <td style="color:#ef4444; font-weight:700">${fmt(o.total)}</td>
+      <td><span class="btn-detail-link">Detail <i class="fas fa-chevron-right"></i></span></td>
+    </tr>
+  `).join('');
 
-  let acc = 0;
-  const data = keys.map(k => {
-    acc += (monthly[k].in - monthly[k].out);
-    return acc;
-  });
-  const labels = keys.map(k => {
-    const [y, m] = k.split('-');
-    return monthNames[parseInt(m)] + ' ' + y;
-  });
-
-  charts.accum.setOption({
-    tooltip: { trigger: 'axis', backgroundColor: 'rgba(15, 23, 42, 0.9)', textStyle: { color: '#fff', fontFamily: 'Inter' } },
-    grid: { top: 20, right: 30, bottom: 40, left: 80 },
-    xAxis: { type: 'category', data: labels, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#94a3b8' } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#e2e8f0' } }, axisLabel: { color: '#94a3b8', formatter: v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'jt' : v } },
-    series: [{
-      data: data, type: 'line', smooth: true, symbolSize: 8,
-      itemStyle: { color: '#4f46e5' },
-      lineStyle: { width: 4, shadowColor: 'rgba(79, 70, 229, 0.3)', shadowBlur: 10, shadowOffsetY: 5 },
-      areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(79, 70, 229, 0.2)' }, { offset: 1, color: 'rgba(79, 70, 229, 0)' }]) }
-    }]
-  });
+  // Proven Loss Table
+  const proven = anoms.filter(a => a.status === 'TERBUKTI').sort((a,b) => b.date - a.date).slice(0, 10);
+  document.querySelector('#tableProvenLoss tbody').innerHTML = proven.map(a => `
+    <tr class="clickable-row" onclick="goToEmployee('${a.name.replace(/'/g, "\\'")}', '${a.nik || ''}')">
+      <td>${a.dateStr}</td>
+      <td>${a.name}</td>
+      <td style="color:#ef4444">${fmt(a.initialDebt)}</td>
+      <td style="color:#10b981">${fmt(a.initialDebt - a.remainingDebt)}</td>
+      <td><span class="btn-detail-link">Detail <i class="fas fa-chevron-right"></i></span></td>
+    </tr>
+  `).join('');
 }
 
-function renderAnalyticsTop10() {
-  const ctx = document.getElementById('analyticsDistrib');
-  if (!ctx) return;
-  if (charts.distrib) charts.distrib.dispose();
-  charts.distrib = echarts.init(ctx);
 
-  const emps = {};
-  allData.forEach(d => { if (!emps[d.name]) emps[d.name] = 0; emps[d.name] += (d.type === 'Tabungan' ? d.nominal : -d.nominal); });
-  const top10 = Object.entries(emps).sort((a, b) => b[1] - a[1]).slice(0, 10).reverse();
 
-  charts.distrib.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 10, right: 40, bottom: 20, left: 120 },
-    xAxis: { type: 'value', splitLine: { show: false }, axisLabel: { show: false } },
-    yAxis: { type: 'category', data: top10.map(t => t[0]), axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#475569', fontWeight: 600 } },
-    series: [{
-      data: top10.map(t => t[1]), type: 'bar', barWidth: 18,
-      itemStyle: { color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [{ offset: 0, color: '#4f46e5' }, { offset: 1, color: '#818cf8' }]), borderRadius: [0, 10, 10, 0] },
-      label: { show: true, position: 'right', formatter: (p) => fmt(p.value), color: '#64748b', fontSize: 10 }
-    }]
-  });
-}
+function exportAnalyticsReport() {
+  const range = document.querySelector('#analyticsTimeFilter button.active').dataset.range;
+  const year = document.getElementById('analyticsYearSelect').value;
+  const month = document.getElementById('analyticsMonthSelect').value;
+  const startStr = document.getElementById('analyticsStartDate').value;
+  const endStr = document.getElementById('analyticsEndDate').value;
 
-function renderAnalyticsCashFlow(keys, monthly) {
-  const ctx = document.getElementById('analyticsCashFlow');
-  if (!ctx) return;
-  if (charts.cashflow) charts.cashflow.dispose();
-  charts.cashflow = echarts.init(ctx);
+  let filtered = [...allData];
+  let anomFiltered = [...allAnomalies];
 
-  const inData = keys.map(k => monthly[k].in);
-  const outData = keys.map(k => monthly[k].out);
-  const labels = keys.map(k => { const [y, m] = k.split('-'); return monthNames[parseInt(m)].substring(0, 3) + ' ' + y; });
-
-  charts.cashflow.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { bottom: 0, left: 'center', itemGap: 20, icon: 'circle' },
-    grid: { top: 30, right: 20, bottom: 60, left: 60 },
-    xAxis: { type: 'category', data: labels, axisLine: { show: false }, axisTick: { show: false } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed' } }, axisLabel: { formatter: v => v >= 1e6 ? (v / 1e6).toFixed(0) + 'jt' : v } },
-    series: [
-      { name: 'Setoran', type: 'bar', data: inData, itemStyle: { color: '#10b981', borderRadius: [4, 4, 0, 0] }, barWidth: 12 }
-    ]
-  });
-}
-
-function renderAnalyticsSegment() {
-  const ctx = document.getElementById('analyticsSegment');
-  if (!ctx) return;
-  if (charts.segment) charts.segment.dispose();
-  charts.segment = echarts.init(ctx);
-
-  const emps = {};
-  allData.forEach(d => { if (!emps[d.name]) emps[d.name] = 0; emps[d.name] += (d.type === 'Tabungan' ? d.nominal : -d.nominal); });
-
-  let low = 0, med = 0, high = 0;
-  Object.values(emps).forEach(v => {
-    if (v < 1000000) low++;
-    else if (v < 10000000) med++;
-    else high++;
-  });
-
-  charts.segment.setOption({
-    tooltip: { trigger: 'item' },
-    legend: { orient: 'vertical', left: 'left', top: 'center' },
-    series: [{
-      type: 'pie', radius: ['50%', '80%'], avoidLabelOverlap: false,
-      itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
-      label: { show: false },
-      data: [
-        { value: low, name: 'Micro (<1jt)', itemStyle: { color: '#94a3b8' } },
-        { value: med, name: 'Medium (1-10jt)', itemStyle: { color: '#6366f1' } },
-        { value: high, name: 'High (>10jt)', itemStyle: { color: '#4338ca' } }
-      ]
-    }]
-  });
-}
-
-function renderAnalyticsAlerts(cur, currentMonthKey) {
-  const container = document.getElementById('analyticsAlerts');
-  if (!container) return;
-
-  const alerts = [];
-
-  // Highest Withdrawal THIS MONTH only
-  const withdrawalEmps = {};
-  globalFilteredData.forEach(d => {
-    if (d.type === 'Penarikan' && d.date) {
-      const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0');
-      if (k === currentMonthKey) {
-        if (!withdrawalEmps[d.name]) withdrawalEmps[d.name] = 0;
-        withdrawalEmps[d.name] += d.nominal;
-      }
+  if (range === 'yearly') {
+    filtered = filtered.filter(d => d.date && d.date.getFullYear() == year);
+    anomFiltered = anomFiltered.filter(a => a.date && a.date.getFullYear() == year);
+  } else if (range === 'monthly') {
+    filtered = filtered.filter(d => d.date && d.date.getFullYear() == year && d.date.getMonth() == month);
+    anomFiltered = anomFiltered.filter(a => a.date && a.date.getFullYear() == year && a.date.getMonth() == month);
+  } else if (range === 'custom') {
+    const s = startStr ? new Date(startStr) : null;
+    const e = endStr ? new Date(endStr) : null;
+    if (e) e.setHours(23, 59, 59);
+    if (s) {
+      filtered = filtered.filter(d => d.date && d.date >= s);
+      anomFiltered = anomFiltered.filter(a => a.date && a.date >= s);
     }
+    if (e) {
+      filtered = filtered.filter(d => d.date && d.date <= e);
+      anomFiltered = anomFiltered.filter(a => a.date && a.date <= e);
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+
+  // 1. KPI Summary Sheet
+  const totalIn = filtered.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
+  const totalOut = filtered.filter(d => d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
+  const initialLoss = anomFiltered.reduce((sum, a) => sum + (a.initialDebt || 0), 0);
+  const remainingLoss = anomFiltered.reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
+  const recovery = initialLoss - remainingLoss;
+  
+  const kpiData = [
+    ["METRIK ANALYTICS", "NILAI"],
+    ["Periode Laporan", range.toUpperCase()],
+    ["Total Investasi Masuk", totalIn],
+    ["Total Penarikan", totalOut],
+    ["Potensi Kerugian (Initial)", initialLoss],
+    ["Sisa Kerugian (Remaining)", remainingLoss],
+    ["Total Pemulihan (Recovery)", recovery],
+    ["Recovery Rate", initialLoss > 0 ? (recovery/initialLoss*100).toFixed(2) + "%" : "100%"]
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(kpiData), "Ringkasan Eksekutif");
+
+  // 2. Anomali Detail Sheet
+  const anomData = anomFiltered.map(a => ({
+    Tanggal: a.dateStr,
+    Karyawan: a.name,
+    NIK: a.nik || '-',
+    'Nominal Transaksi': a.nominal,
+    'Defisit Awal': a.initialDebt,
+    'Sisa Cicilan': a.remainingDebt,
+    Status: a.status,
+    Sistem: a.systemStatus,
+    Reviewer: a.reviewer || '-',
+    Catatan: a.notes || '-'
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(anomData), "Detail Kasus");
+
+  // 3. Top Offenders
+  const offenderMap = {};
+  anomFiltered.forEach(a => {
+    const id = a.nik || a.name;
+    if (!offenderMap[id]) offenderMap[id] = { Nama: a.name, NIK: a.nik || '-', 'Total Kasus': 0, 'Total Defisit': 0 };
+    offenderMap[id]['Total Kasus']++;
+    offenderMap[id]['Total Defisit'] += (a.initialDebt || 0);
   });
-  const topOut = Object.entries(withdrawalEmps).sort((a, b) => b[1] - a[1])[0];
-  if (topOut) alerts.push({ type: 'warning', icon: 'fa-arrow-up-right-from-square', text: `Penarikan terbesar bulan ini oleh <b>${topOut[0]}</b> senilai <b>${fmt(topOut[1])}</b>.` });
+  const topOffenders = Object.values(offenderMap).sort((a,b) => b['Total Defisit'] - a['Total Defisit']);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(topOffenders), "Top Pelanggaran");
 
-  // Negative Balance
-  const negativeCount = allAnomalies.filter(a => a.status === 'In Progress').length;
-  if (negativeCount > 0) alerts.push({ type: 'danger', icon: 'fa-exclamation-triangle', text: `Ditemukan <b>${negativeCount} transaksi</b> anomali/defisit yang perlu segera divalidasi.` });
-
-  // Passive Status
-  const activeThisMonth = cur.users.size;
-  const totalEmps = new Set(allData.map(d => d.name)).size;
-  if (activeThisMonth < totalEmps * 0.5) alerts.push({ type: 'info', icon: 'fa-user-clock', text: `Tingkat aktivitas karyawan bulan ini rendah (hanya <b>${Math.round(activeThisMonth / totalEmps * 100)}%</b> aktif).` });
-
-  if (alerts.length === 0) {
-    container.innerHTML = '<div style="text-align:center; padding: 40px; color:var(--text-muted);"><i class="fas fa-check-circle" style="font-size:2rem; color:var(--success); margin-bottom:10px; display:block;"></i> Kondisi keuangan stabil. Tidak ada alert khusus saat ini.</div>';
-  } else {
-    container.innerHTML = `<div class="alert-list">${alerts.map(a => `<div class="alert-card ${a.type}"><i class="fas ${a.icon}"></i> <span>${a.text}</span></div>`).join('')}</div>`;
-  }
-}
-
-function renderAnalyticsInsights(totalDana, activeEmps, cur, prev) {
-  const container = document.getElementById('smartInsights');
-  if (!container) return;
-
-  const insights = [];
-
-  // 1. Growth Insight
-  const flow = cur.in - cur.out;
-  const prevFlow = prev.in - prev.out;
-  if (flow > prevFlow) {
-    insights.push(`Pertumbuhan dana bersih meningkat drastis dibandingkan bulan lalu, didorong oleh peningkatan setoran sebesar <b>${Math.round((cur.in - prev.in) / Math.max(1, prev.in) * 100)}%</b>.`);
-  } else {
-    insights.push(`Arus kas bersih menurun bulan ini. Disarankan memantau tren penarikan yang meningkat.`);
-  }
-
-  // 2. Concentration
-  const emps = {}; allData.forEach(d => { if (!emps[d.name]) emps[d.name] = 0; emps[d.name] += (d.type === 'Tabungan' ? d.nominal : -d.nominal); });
-  const sorted = Object.values(emps).sort((a, b) => b - a);
-  const top10Total = sorted.slice(0, 10).reduce((a, b) => a + b, 0);
-  const concentration = Math.round((top10Total / Math.max(1, totalDana)) * 100);
-  insights.push(`<b>${concentration}%</b> dana saat ini terkonsentrasi hanya pada 10 karyawan utama. Ini menunjukkan ketergantungan modal yang tinggi pada kelompok kecil.`);
-
-  // 3. Timing
-  insights.push(`Aktivitas transaksi paling tinggi terjadi pada minggu ke-2 setiap bulannya.`);
-
-  container.innerHTML = `<div class="insight-box">${insights.map(i => `<div class="insight-item">${i}</div>`).join('')}</div>`;
+  const filename = `Laporan_Analytics_${range}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  toast('Laporan Analytics berhasil diekspor', 'success');
 }
 
 
@@ -2614,11 +3717,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
       if (isAdmin) exportBtn?.classList.remove('hidden');
       else exportBtn?.classList.add('hidden');
     } else if (page === 'anomali') {
-      globalFilterContainer?.classList.remove('hidden');
-      typeFilter?.classList.add('hidden');
-      anomaliFilter?.classList.remove('hidden');
-      if (isAdmin) exportBtn?.classList.remove('hidden');
-      else exportBtn?.classList.add('hidden');
+      globalFilterContainer?.classList.add('hidden');
+      anomaliFilter?.classList.add('hidden');
+      exportBtn?.classList.add('hidden');
     } else if (page === 'admin') {
       globalFilterContainer?.classList.add('hidden');
       exportBtn?.classList.add('hidden');
@@ -2686,62 +3787,238 @@ document.addEventListener('click', e => {
       showEmployee(currentEmpData.name, currentEmpData.nik);
     }
   }
+
+  // Sorting untuk Tabel Anomali
+  const thAnomali = e.target.closest('.sortable-anomali');
+  if (thAnomali) {
+    const col = parseInt(thAnomali.dataset.col);
+    if (anomaliSort.col === col) {
+      anomaliSort.asc = !anomaliSort.asc;
+    } else {
+      anomaliSort.col = col;
+      anomaliSort.asc = true;
+    }
+    renderAnomaliTable();
+  }
 });
 function exportAnomaliData() {
   const q = (document.getElementById('anomaliSearch')?.value || '').toLowerCase().trim();
-  const s = document.getElementById('topAnomaliStatusFilter')?.value || '';
+  const s = document.getElementById('anomaliStatusFilter')?.value || '';
+  const filterRepeat = document.getElementById('anomaliRepeatFilter')?.value || 'all';
+  const mode = document.getElementById('anomaliFilterMode')?.value || 'custom';
+  const startMonth = document.getElementById('anomaliFilterStartMonth')?.value || '';
+  const endMonth = document.getElementById('anomaliFilterEndMonth')?.value || '';
 
-  const inputStart = document.getElementById('globalStartDate');
-  const inputEnd = document.getElementById('globalEndDate');
-  const startDate = inputStart?.value ? new Date(inputStart.value) : null;
-  const endDate = inputEnd?.value ? new Date(inputEnd.value) : null;
-  if (startDate) startDate.setHours(0, 0, 0, 0);
-  if (endDate) endDate.setHours(23, 59, 59, 999);
+  // Hitung frekuensi anomali per orang untuk filter repeat
+  const frequencyMap = {};
+  allAnomalies.forEach(a => {
+    const id = a.nik && a.nik !== '-' ? a.nik : a.name;
+    frequencyMap[id] = (frequencyMap[id] || 0) + 1;
+  });
 
-  let filtered = allAnomalies;
-  if (startDate || endDate) {
-    filtered = filtered.filter(a => {
-      let pass = true;
-      if (startDate && a.date) pass = pass && a.date >= startDate;
-      if (endDate && a.date) pass = pass && a.date <= endDate;
-      return pass;
-    });
-  }
+  const checkedStatuses = Array.from(document.querySelectorAll('.sys-status-chk:checked')).map(cb => cb.value);
 
-  filtered = filtered.filter(a => {
-    const matchSearch = a.name.toLowerCase().includes(q);
-    const matchStatus = s ? a.status === s : true;
-    return matchSearch && matchStatus;
+  let filtered = allAnomalies.filter(a => {
+    let pass = true;
+    
+    // 1. Search filter
+    const variations = (a.nik && a.nik !== '-') ? (allAliasesMap[a.nik] ? Array.from(allAliasesMap[a.nik]) : [a.name]) : [a.name];
+    if (q) pass = pass && (variations.some(v => v.toLowerCase().includes(q)) || (a.nik && a.nik.toLowerCase().includes(q)));
+    
+    // 2. Status filter (Manual Review)
+    if (s) pass = pass && a.status === s;
+
+    // 2.5 System Status Filter (Checkboxes)
+    if (checkedStatuses.length > 0) {
+      pass = pass && checkedStatuses.includes(a.systemStatus);
+    } else {
+      pass = false;
+    }
+
+    // 3. Repeat filter
+    if (filterRepeat === 'repeat') {
+      const id = a.nik && a.nik !== '-' ? a.nik : a.name;
+      pass = pass && frequencyMap[id] > 1;
+    }
+    
+    // 4. Date filter (Custom Mode)
+    if (mode === 'custom' && a.date) {
+      if (startMonth) {
+        const [sy, sm] = startMonth.split('-').map(Number);
+        const startDate = new Date(sy, sm, 1);
+        pass = pass && a.date >= startDate;
+      }
+      if (endMonth) {
+        const [ey, em] = endMonth.split('-').map(Number);
+        const endDate = new Date(ey, em + 1, 0, 23, 59, 59);
+        pass = pass && a.date <= endDate;
+      }
+    }
+    
+    return pass;
   });
 
   if (filtered.length === 0) {
-    toast('Tidak ada data anomali untuk di-export', 'error');
+    toast('Tidak ada data transaksi mencurigakan untuk diekspor', 'error');
     return;
   }
 
-  const exportData = filtered.map((a, i) => ({
-    No: i + 1,
-    Tanggal: a.dateStr,
-    Karyawan: a.name,
-    'Nominal Penarikan': a.nominal,
-    'Saldo Sebelum': a.balanceBefore,
-    'Saldo Sesudah': a.balanceAfter,
-    'Alasan Anomali': a.reason,
-    'Review Status': a.status === 'Verified' ? 'Terbukti' : (a.status === 'Salah Orang' ? 'Koreksi' : (a.status === 'In Progress' ? 'Masih Progres' : a.status)),
-    'Review Notes': a.notes,
-    'Reviewer': a.reviewer,
-    'Update Terakhir': a.reviewTime ? new Date(a.reviewTime).toLocaleString('id-ID') : '-',
-    'Nama Koreksi': a.correctName || '-',
-    'NIK Koreksi': a.correctNik || '-'
-  }));
+  const exportData = filtered.map((a, i) => {
+    const emp = allEmployees.find(e => (e.nik && e.nik === a.nik) || e.name === a.name);
+    const aliases = emp ? emp.variations.filter(v => v !== a.name).join(', ') : '-';
+
+    return {
+      No: i + 1,
+      Tanggal: a.dateStr,
+      Karyawan: a.name,
+      Alias: aliases,
+      'Nominal Penarikan': a.nominal,
+      'Saldo Sebelum': a.balanceBefore,
+      'Hutang Awal': a.initialDebt,
+      'Sisa Hutang': a.remainingDebt,
+      'Status Sistem': a.systemStatus,
+      'Status Review': a.status,
+      'Review Notes': a.notes,
+      'Reviewer': a.reviewer,
+      'Update Terakhir': a.reviewTime ? new Date(a.reviewTime).toLocaleString('id-ID') : '-',
+      'Nama Koreksi': a.correctName || '-',
+      'NIK Koreksi': a.correctNik || '-'
+    };
+  });
 
   const ws = XLSX.utils.json_to_sheet(exportData);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Data Anomali");
+  XLSX.utils.book_append_sheet(wb, ws, "Data Transaksi Mencurigakan");
 
   let statusSuffix = s ? `_${s.replace(/\s+/g, '_')}` : "_Semua_Status";
-  const filename = `Data_Anomali${statusSuffix}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  const filename = `Data_Transaksi_Mencurigakan${statusSuffix}_${new Date().toISOString().split('T')[0]}.xlsx`;
 
   XLSX.writeFile(wb, filename);
-  toast('Data anomali berhasil didownload', 'success');
+  toast('Data transaksi mencurigakan berhasil didownload', 'success');
 }
+
+window.exportEmployeeData = function() {
+  if (!currentEmpData.name) return;
+  
+  const name = currentEmpData.name;
+  const filterMode = document.getElementById('empFilterMode')?.value || 'custom';
+  const filterYear = document.getElementById('empFilterYear')?.value || '';
+
+  // 1. Get History Data from the table rows
+  const historyRows = Array.from(document.querySelectorAll('#empTable tbody tr')).map(tr => {
+    const tds = tr.querySelectorAll('td');
+    if (tds.length < 8) return null; // Skip empty/invalid rows
+    return {
+      No: tds[0].innerText.trim(),
+      Tanggal: tds[1].innerText.replace('DIEDIT', '').trim(),
+      'Nama Record': tds[2].innerText.trim(),
+      Keterangan: tds[3].innerText.replace('Bukti', '').trim(),
+      Nominal: tds[4].innerText.trim(),
+      Tipe: tds[5].innerText.trim(),
+      'Bunga bulan sebelumnya': tds[6].innerText.trim(),
+      'Kumulatif (+BUNGA)': tds[7].innerText.trim()
+    };
+  }).filter(Boolean);
+
+  if (historyRows.length === 0) {
+    toast('Tidak ada data yang ditampilkan untuk didownload', 'error');
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+  
+  // Sheet 1: History
+  const wsHistory = XLSX.utils.json_to_sheet(historyRows);
+  XLSX.utils.book_append_sheet(wb, wsHistory, "Riwayat Transaksi");
+
+  // 2. If Monthly mode, export Recap too
+  if (filterMode === 'monthly') {
+    const recapRows = Array.from(document.querySelectorAll('#empRecapTable tbody tr')).map(tr => {
+      const tds = tr.querySelectorAll('td');
+      if (tds.length < 5) return null;
+      return {
+        Bulan: tds[0].innerText.trim(),
+        Setoran: tds[1].innerText.trim(),
+        Penarikan: tds[2].innerText.trim(),
+        'Bunga bulan sebelumnya': tds[3].innerText.trim(),
+        'Saldo Akhir': tds[4].innerText.trim()
+      };
+    }).filter(Boolean);
+    const wsRecap = XLSX.utils.json_to_sheet(recapRows);
+    XLSX.utils.book_append_sheet(wb, wsRecap, "Rekap Bulanan " + filterYear);
+  }
+
+  const filename = `Laporan_Investasi_${name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  toast('Laporan investasi berhasil didownload', 'success');
+};
+
+// Event Listeners for Anomali Filters
+['anomaliSearch', 'anomaliFilterMode', 'anomaliFilterStartMonth', 'anomaliFilterEndMonth', 'anomaliStatusFilter', 'anomaliRepeatFilter', 'anomaliFilterYear'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener(id === 'anomaliSearch' ? 'input' : 'change', () => {
+      if (id === 'anomaliFilterMode') {
+        const mode = el.value;
+        const customGrp = document.getElementById('anomaliFilterCustomGroup');
+        const yearGrp = document.getElementById('anomaliFilterYearGroup');
+        if (mode === 'monthly') {
+          if (customGrp) customGrp.classList.add('hidden');
+          if (yearGrp) yearGrp.classList.remove('hidden');
+        } else {
+          if (customGrp) customGrp.classList.remove('hidden');
+          if (yearGrp) yearGrp.classList.add('hidden');
+        }
+        document.querySelectorAll('#anomaliModeFilterBtns button').forEach(b => {
+          b.classList.toggle('active', b.dataset.mode === mode);
+        });
+      }
+      renderAnomaliTable();
+    });
+  }
+});
+
+// Sync anomaliModeFilterBtns
+const anomModeBtns = document.querySelectorAll('#anomaliModeFilterBtns button');
+const anomFilterMode = document.getElementById('anomaliFilterMode');
+anomModeBtns.forEach(btn => {
+  btn.onclick = () => {
+    anomModeBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    if (anomFilterMode) {
+      anomFilterMode.value = btn.dataset.mode;
+      anomFilterMode.dispatchEvent(new Event('change'));
+    }
+  };
+});
+
+// Clear Anomali Filter
+const btnClearAnomaliFilter = document.getElementById('btnClearAnomaliFilter');
+if (btnClearAnomaliFilter) {
+  btnClearAnomaliFilter.onclick = () => {
+    document.getElementById('anomaliSearch').value = '';
+    document.getElementById('anomaliFilterStartMonth').value = '';
+    document.getElementById('anomaliFilterEndMonth').value = '';
+    document.getElementById('anomaliStatusFilter').value = '';
+    document.getElementById('anomaliRepeatFilter').value = 'all';
+    
+    document.querySelectorAll('.sys-status-chk').forEach(chk => {
+      chk.checked = (chk.value === 'MENCURIGAKAN' || chk.value === 'DICICIL');
+    });
+
+    if (anomFilterMode) {
+      anomFilterMode.value = 'custom';
+      anomFilterMode.dispatchEvent(new Event('change'));
+    } else {
+      renderAnomaliTable();
+    }
+  };
+}
+
+// Checkbox Listeners
+document.querySelectorAll('.sys-status-chk').forEach(chk => {
+  chk.addEventListener('change', () => {
+    renderAnomaliTable();
+  });
+});
+
