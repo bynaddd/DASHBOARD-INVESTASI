@@ -233,7 +233,7 @@ module.exports = async (req, res) => {
           if (!targetSheet) {
             targetSheet = meta.data.sheets.find(s => {
               const t = s.properties.title;
-              return t !== 'EditLog' && t !== 'ReviewLog' && t !== 'transaksi mencurigakan';
+              return t !== 'EditLog' && t !== 'ReviewLog' && t !== 'meragukan';
             }) || meta.data.sheets[0];
           }
           
@@ -306,9 +306,9 @@ module.exports = async (req, res) => {
         }
       }
 
-      // 4. Sync Anomalies to "transaksi mencurigakan" sheet
+      // 4. Sync Anomalies to "meragukan" sheet
       if (type === 'syncAnomalies' && Array.isArray(anomalies)) {
-        const sheetName = "transaksi mencurigakan";
+        const sheetName = "meragukan";
         const headers = ["Tanggal", "Karyawan", "Nominal", "Saldo Sebelum", "Selisih", "Alasan", "Status", "Notes", "Reviewer"];
         const rows = anomalies.map(a => [
           a.tanggal, a.karyawan, a.nominal, a.saldoSebelum, a.selisih, a.alasan, a.status, a.notes, a.reviewer

@@ -42,7 +42,7 @@
           <div class="choice-icon" style="background: rgba(79, 70, 229, 0.2);"><i class="fas fa-user-shield"></i></div>
           <div class="choice-info">
             <h4>Masuk sebagai Admin</h4>
-            <p>Akses penuh (Update Data & Transaksi Mencurigakan)</p>
+            <p>Akses penuh (Update Data & Transaksi Meragukan)</p>
           </div>
         </div>
       </div>
@@ -90,7 +90,7 @@
       <i class="fas fa-file-import"></i><span>Update Data</span>
     </a>
     <a href="#" class="nav-item" data-page="anomali" id="nav-anomali">
-      <i class="fas fa-exclamation-triangle" style="color: #ef4444;"></i><span>Transaksi Mencurigakan</span>
+      <i class="fas fa-exclamation-triangle" style="color: #ef4444;"></i><span>Transaksi Meragukan</span>
     </a>
     <a href="#" class="nav-item" id="btnLogout" onclick="logout()">
       <i class="fas fa-sign-out-alt"></i><span>Keluar</span>
@@ -571,7 +571,7 @@
           <div class="chart-body"><div id="chartAnomaliVolume" style="width:100%; height:300px;"></div></div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><h3><i class="fas fa-money-bill-wave"></i> Tren Nominal Kerugian (Defisit)</h3></div>
+          <div class="chart-header"><h3><i class="fas fa-money-bill-wave"></i> Tren Nominal Selisih (Defisit)</h3></div>
           <div class="chart-body"><div id="chartAnomaliValue" style="width:100%; height:300px;"></div></div>
         </div>
         <div class="chart-card" style="grid-column: span 2;">
@@ -594,7 +594,7 @@
       <h3 style="font-size: 1.1rem; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; color: #1e293b;"><i class="fas fa-microscope" style="color: #ef4444;"></i> Analisis Mendalam (Identitas & Perilaku)</h3>
       <div class="analytics-grid-2">
         <div class="chart-card">
-          <div class="chart-header"><h3><i class="fas fa-user-ninja"></i> 10 Karyawan Teratas (Transaksi Mencurigakan Tertinggi)</h3></div>
+          <div class="chart-header"><h3><i class="fas fa-user-ninja"></i> 10 Karyawan Teratas (Transaksi Meragukan Tertinggi)</h3></div>
           <div class="table-scrollable">
             <table class="data-table data-table-compact" id="tableTopAnomali">
               <thead><tr><th>NIK</th><th>Nama</th><th>Total Kasus</th><th>Total Defisit</th><th>Aksi</th></tr></thead>
@@ -603,7 +603,7 @@
           </div>
         </div>
         <div class="chart-card">
-          <div class="chart-header"><h3><i class="fas fa-check-double"></i> Kasus Terbukti (Kerugian Terkonfirmasi)</h3></div>
+          <div class="chart-header"><h3><i class="fas fa-check-double"></i> Kasus Terbukti (Selisih Terkonfirmasi)</h3></div>
           <div class="table-scrollable">
             <table class="data-table data-table-compact" id="tableProvenLoss">
               <thead><tr><th>Tanggal</th><th>Nama</th><th>Nominal</th><th>Recovery</th><th>Aksi</th></tr></thead>
@@ -654,7 +654,7 @@
 
       <div id="sysStatusGroup" style="display: flex; gap: 10px; align-items: center; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
         <label style="font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-right: 2px;">Status:</label>
-        <label style="font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600;"><input type="checkbox" class="sys-status-chk" value="MENCURIGAKAN" checked> <span style="color: #ef4444;">Mencurigakan</span></label>
+        <label style="font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600;"><input type="checkbox" class="sys-status-chk" value="MENCURIGAKAN" checked> <span style="color: #ef4444;">Meragukan</span></label>
         <label style="font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600;"><input type="checkbox" class="sys-status-chk" value="DICICIL" checked> <span style="color: #f59e0b;">Dicicil</span></label>
         <label style="font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: 600;"><input type="checkbox" class="sys-status-chk" value="LUNAS"> <span style="color: #10b981;">Lunas</span></label>
       </div>
@@ -683,7 +683,7 @@
 
     <div class="chart-card full-width">
       <div class="chart-header">
-        <h3><i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Transaksi Penarikan Mencurigakan</h3>
+        <h3><i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Transaksi Penarikan Meragukan</h3>
       </div>
       <div class="table-wrapper">
         <table class="data-table" id="anomaliTable">
@@ -695,7 +695,7 @@
               <th class="sortable-anomali" data-col="3" style="cursor:pointer">Nominal Penarikan <i class="fas fa-sort"></i></th>
               <th class="sortable-anomali" data-col="4" style="cursor:pointer">Saldo Sebelum <i class="fas fa-sort"></i></th>
               <th class="sortable-anomali" data-col="5" style="cursor:pointer">Selisih <i class="fas fa-sort"></i></th>
-              <th>Keterangan Transaksi Mencurigakan</th>
+              <th>Keterangan Transaksi Meragukan</th>
               <th>Status Tinjauan</th>
               <th>Catatan</th>
               <th>Peninjau</th>
@@ -809,7 +809,7 @@
 <div id="modalReview" class="modal-overlay hidden">
   <div class="modal-content">
     <div class="modal-header">
-      <h3><i class="fas fa-clipboard-check"></i> Review Transaksi Mencurigakan</h3>
+      <h3><i class="fas fa-clipboard-check"></i> Review Transaksi Meragukan</h3>
       <button class="btn-close" id="btnCloseModal"><i class="fas fa-times"></i></button>
     </div>
     <div class="modal-body">

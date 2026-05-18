@@ -870,12 +870,12 @@ function renderFundCompositionChart() {
   
   const chartData = [
     { value: modalPokokSisa, name: 'Modal Pokok (Sisa)', itemStyle: { color: '#4f46e5' } },
-    { value: keuntunganSisa, name: 'Keuntungan (Sisa)', itemStyle: { color: '#f59e0b' } },
+    { value: keuntunganSisa, name: 'Bunga (Sisa)', itemStyle: { color: '#f59e0b' } },
     { value: penarikanValid, name: 'Total Penarikan', itemStyle: { color: '#ef4444' } }
   ];
 
   if (transaksiMencurigakan > 0) {
-    chartData.push({ value: transaksiMencurigakan, name: 'Dana Mencurigakan', itemStyle: { color: '#8b5cf6' } });
+    chartData.push({ value: transaksiMencurigakan, name: 'Dana Meragukan', itemStyle: { color: '#8b5cf6' } });
   }
 
   charts.fundComposition.setOption({
@@ -1369,7 +1369,7 @@ function renderAnomaliTable() {
   });
 
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding: 20px; color: #10b981;"><i class="fas fa-check-circle"></i> Tidak ada transaksi mencurigakan terdeteksi.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding: 20px; color: #10b981;"><i class="fas fa-check-circle"></i> Tidak ada transaksi meragukan terdeteksi.</td></tr>`;
   } else {
     tbody.innerHTML = filtered.map((a, idx) => {
       const emp = allEmployees.find(e => (e.nik && e.nik === a.nik) || e.name === a.name);
@@ -1409,7 +1409,7 @@ function renderAnomaliTable() {
           <div>${fmt(a.initialDebt)}</div>
           ${a.remainingDebt < a.initialDebt && a.remainingDebt > 0 ? `<div style="font-size:0.7rem; color:#f59e0b; font-weight:600; margin-top:4px;">Sisa Cicilan: ${fmt(a.remainingDebt)}</div>` : ''}
         </td>
-        <td><span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; border: 1px solid ${sysStatusColor}; color: ${sysStatusColor}; font-weight: 600; text-transform: uppercase;">${a.systemStatus}</span></td>
+        <td><span style="font-size:0.75rem; padding: 2px 6px; border-radius: 4px; border: 1px solid ${sysStatusColor}; color: ${sysStatusColor}; font-weight: 600; text-transform: uppercase;">${a.systemStatus === 'MENCURIGAKAN' ? 'MERAGUKAN' : a.systemStatus}</span></td>
         <td><span class="badge-status ${statusClass}">${a.status}</span></td>
         <td style="display: flex; gap: 4px;">
           ${reviewBtn}
@@ -1453,7 +1453,7 @@ function renderAnomaliAnalytics(data, container) {
 
   // 3. Matrix Analysis (System vs Review)
   const matrix = {
-    'Penipuan Selesai Dibayar': data.filter(a => a.systemStatus === 'LUNAS' && a.status === 'TERBUKTI').length,
+    'Selisih Selesai Dibayar': data.filter(a => a.systemStatus === 'LUNAS' && a.status === 'TERBUKTI').length,
     'Sedang Pemulihan': data.filter(a => a.systemStatus === 'DICICIL' && a.status === 'TERBUKTI').length,
     'False Positive (Koreksi)': data.filter(a => a.status === 'SALAH INPUT').length,
     'Belum Terjamah': data.filter(a => a.systemStatus === 'MENCURIGAKAN' && a.status === 'MENUNGGU REVIEW').length
@@ -1540,7 +1540,7 @@ function renderAnomaliAnalytics(data, container) {
                   ${Object.entries(matrix).map(([label, val]) => `
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid #f1f5f9;">
                       <span style="font-size:0.85rem; color:#64748b;">${label}</span>
-                      <span style="background:${label.includes('Fraud') ? '#fee2e2' : '#f1f5f9'}; color:${label.includes('Fraud') ? '#ef4444' : '#1e293b'}; padding:2px 10px; border-radius:20px; font-weight:700; font-size:0.8rem;">${val} Kasus</span>
+                      <span style="background:${label.includes('Selisih') ? '#fee2e2' : '#f1f5f9'}; color:${label.includes('Selisih') ? '#ef4444' : '#1e293b'}; padding:2px 10px; border-radius:20px; font-weight:700; font-size:0.8rem;">${val} Kasus</span>
                     </div>
                   `).join('')}
                 </div>
@@ -1574,7 +1574,7 @@ function renderAnomaliAnalytics(data, container) {
   document.querySelector('#anomaliTable thead').innerHTML = `
     <tr>
       <th colspan="6" style="background:#1e293b; color:#fff; padding:12px; text-align:center; border-radius: 12px 12px 0 0;">
-        <i class="fas fa-microscope"></i> MESIN ANALISIS: POLA & HISTORI TRANSAKSI MENCURIGAKAN
+        <i class="fas fa-microscope"></i> MESIN ANALISIS: POLA & HISTORI TRANSAKSI MERAGUKAN
       </th>
     </tr>
   `;
@@ -2052,7 +2052,7 @@ function renderTxTable() {
     const escName = d.name.replace(/'/g, "\\'");
     const empNik = d.nik || '';
 
-    const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Mencurigakan"></i>` : '';
+    const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Meragukan"></i>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
     const editBtn = (isAdmin && d.type === 'Penarikan') ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
 
@@ -2571,7 +2571,7 @@ function showEmployee(name, nik = '') {
       <div style="display: flex; justify-content: space-between;"><span>Modal:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.modal)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>Bunga:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.bunga)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>T. Salah:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
-      <div style="display: flex; justify-content: space-between;"><span>Mencurigakan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Meragukan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
     </div>
   `;
 
@@ -2584,7 +2584,7 @@ function showEmployee(name, nik = '') {
   cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Akhir', value: fmt(Math.round(saldo)), sub: 'Kumulatif saat ini' });
   cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
   cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
-  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'ROI (Return)', value: roi.toFixed(2) + '%', sub: `Est. Keuntungan: ${fmt(Math.round(exactBunga))}` });
+  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'ROI (Return)', value: roi.toFixed(2) + '%', sub: `Est. Bunga: ${fmt(Math.round(exactBunga))}` });
 
   document.getElementById('empCards').innerHTML = cards.map(c => `
     <div class="summary-card">
@@ -2653,7 +2653,7 @@ function showEmployee(name, nik = '') {
       label: { show: false }, labelLine: { show: false },
       data: [
         { value: lifeIn, name: 'Total Setoran (Modal)', itemStyle: { color: '#4f46e5' } },
-        { value: exactBunga, name: 'Total Keuntungan (Return)', itemStyle: { color: '#f59e0b' } }
+        { value: exactBunga, name: 'Total Bunga (Return)', itemStyle: { color: '#f59e0b' } }
       ]
     }]
   });
@@ -2701,7 +2701,7 @@ function showEmployee(name, nik = '') {
         const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
         const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'MENUNGGU REVIEW');
         const highlightBg = isSuspicious ? 'background-color: rgba(239, 68, 68, 0.08);' : '';
-        const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Mencurigakan"></i>` : '';
+        const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Meragukan"></i>` : '';
 
         // Tampilkan bunga yang cair di baris ini
         const bungaDisplay = currentInterest > 0 ? fmt(currentInterest) : '-';
@@ -3047,9 +3047,9 @@ function renderFinancialKpis(data, anoms, totalSaldoWithInterest = 0) {
     { label: 'Total Uang Masuk', val: fmt(totalIn), icon: 'fa-arrow-down', cls: 'green', sub: 'Hanya Modal Pokok / Setoran (Tanpa Bunga)' },
     { label: 'Total Penarikan', val: fmt(totalOut), icon: 'fa-external-link-alt', cls: 'amber', sub: 'Total akumulasi penarikan dana' },
     { label: 'Total Over-Withdraw', val: fmt(totalInitialLoss), icon: 'fa-exclamation-circle', cls: 'orange', sub: 'Potensi defisit penarikan awal' },
-    { label: 'Kerugian Terbukti', val: fmt(provenLoss), icon: 'fa-shield-alt', cls: 'red', sub: 'Total kerugian (fraud) yang terkonfirmasi' },
-    { label: 'Total Recovery', val: fmt(recovery), icon: 'fa-redo', cls: 'green', sub: 'Dana kerugian yang berhasil dipulihkan' },
-    { label: 'Recovery Rate %', val: recoveryRate.toFixed(1) + '%', icon: 'fa-percent', cls: 'cyan', sub: 'Rasio keberhasilan pemulihan kerugian' }
+    { label: 'Selisih Terbukti', val: fmt(provenLoss), icon: 'fa-shield-alt', cls: 'red', sub: 'Total selisih yang terkonfirmasi' },
+    { label: 'Total Recovery', val: fmt(recovery), icon: 'fa-redo', cls: 'green', sub: 'Dana selisih yang berhasil dipulihkan' },
+    { label: 'Recovery Rate %', val: recoveryRate.toFixed(1) + '%', icon: 'fa-percent', cls: 'cyan', sub: 'Rasio keberhasilan pemulihan selisih' }
   ];
 
   document.getElementById('analyticsFinancialKpis').innerHTML = kpis.map(k => `
@@ -3182,8 +3182,8 @@ function renderRecoveryTrend(anoms) {
 
 function renderInsightMatrix(anoms) {
   const matrix = [
-    { label: 'Kasus Aktif Belum Dicek', icon: 'fa-hourglass-start', color: '#ef4444', desc: 'Mencurigakan + Menunggu Review', val: anoms.filter(a => a.systemStatus === 'MENCURIGAKAN' && a.status === 'MENUNGGU REVIEW').length },
-    { label: 'Fraud Selesai Dibayar', icon: 'fa-check-double', color: '#10b981', desc: 'Lunas + Terbukti', val: anoms.filter(a => a.systemStatus === 'LUNAS' && a.status === 'TERBUKTI').length },
+    { label: 'Kasus Aktif Belum Dicek', icon: 'fa-hourglass-start', color: '#ef4444', desc: 'Meragukan + Menunggu Review', val: anoms.filter(a => a.systemStatus === 'MENCURIGAKAN' && a.status === 'MENUNGGU REVIEW').length },
+    { label: 'Selisih Selesai Dibayar', icon: 'fa-check-double', color: '#10b981', desc: 'Lunas + Terbukti', val: anoms.filter(a => a.systemStatus === 'LUNAS' && a.status === 'TERBUKTI').length },
     { label: 'False Positive / Koreksi', icon: 'fa-user-edit', color: '#3b82f6', desc: 'Lunas + Salah Input', val: anoms.filter(a => a.status === 'SALAH INPUT').length },
     { label: 'Sedang Proses Recovery', icon: 'fa-sync', color: '#f59e0b', desc: 'Dicicil + Terbukti', val: anoms.filter(a => a.systemStatus === 'DICICIL' && a.status === 'TERBUKTI').length }
   ];
@@ -3280,8 +3280,8 @@ function exportAnalyticsReport() {
     ["SAAT INI (YANG DIPEGANG)", totalIn - totalOut],
     ["Total Uang Masuk", totalIn],
     ["Total Penarikan", totalOut],
-    ["Potensi Kerugian (Initial)", initialLoss],
-    ["Sisa Kerugian (Remaining)", remainingLoss],
+    ["Potensi Selisih (Initial)", initialLoss],
+    ["Sisa Selisih (Remaining)", remainingLoss],
     ["Total Pemulihan (Recovery)", recovery],
     ["Recovery Rate", initialLoss > 0 ? (recovery/initialLoss*100).toFixed(2) + "%" : "100%"]
   ];
@@ -3939,7 +3939,7 @@ function exportAnomaliData() {
   });
 
   if (filtered.length === 0) {
-    toast('Tidak ada data transaksi mencurigakan untuk diekspor', 'error');
+    toast('Tidak ada data transaksi meragukan untuk diekspor', 'error');
     return;
   }
 
@@ -3968,13 +3968,13 @@ function exportAnomaliData() {
 
   const ws = XLSX.utils.json_to_sheet(exportData);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Data Transaksi Mencurigakan");
+  XLSX.utils.book_append_sheet(wb, ws, "Data Transaksi Meragukan");
 
   let statusSuffix = s ? `_${s.replace(/\s+/g, '_')}` : "_Semua_Status";
-  const filename = `Data_Transaksi_Mencurigakan${statusSuffix}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  const filename = `Data_Transaksi_Meragukan${statusSuffix}_${new Date().toISOString().split('T')[0]}.xlsx`;
 
   XLSX.writeFile(wb, filename);
-  toast('Data transaksi mencurigakan berhasil didownload', 'success');
+  toast('Data transaksi meragukan berhasil didownload', 'success');
 }
 
 window.exportEmployeeData = function() {
