@@ -145,11 +145,11 @@
         </ul>
       </div>
       <div class="intel-right">
-        <div class="date-group" style="text-align: right;">
+        <div class="date-group" style="text-align: right; display: none;">
           <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Acuan Data Setoran</div>
           <div id="lastDepositDate" style="font-size: 1rem; font-weight: 800; color: var(--primary);">Memuat...</div>
         </div>
-        <div class="date-group" style="text-align: right;">
+        <div class="date-group" style="text-align: right; display: none;">
           <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Waktu Saat Ini</div>
           <div id="realtimeDate" style="font-size: 1rem; font-weight: 800; color: var(--text);">15 Mei 2026</div>
         </div>
@@ -164,7 +164,8 @@
       </div>
       
       <div class="btn-group" id="dashboardTimeFilter" style="display: flex; gap: 8px;">
-        <button class="btn btn-outline active" data-range="all" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Semua Waktu</button>
+        <button class="btn btn-outline active" data-range="latest" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Bulan Terakhir</button>
+        <button class="btn btn-outline" data-range="all" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Semua Waktu</button>
         <button class="btn btn-outline" data-range="yearly" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Tahunan</button>
         <button class="btn btn-outline" data-range="monthly" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Bulanan</button>
         <button class="btn btn-outline" data-range="custom" style="padding: 8px 16px; font-size: 0.85rem; border-radius: 8px;">Custom Range</button>
@@ -240,7 +241,7 @@
         <div class="card-top">
           <div class="card-icon amber"><i class="fas fa-chart-line"></i></div>
         </div>
-        <div class="card-label" id="kpiNetGrowthLabel">Pertumbuhan Bersih Bulanan</div>
+        <div class="card-label" id="kpiNetGrowthLabel">CASHFLOW NET</div>
         <div class="card-value" id="kpiNetGrowth">Rp 0</div>
         <div class="card-trend" id="kpiNetGrowthTrend">--</div>
       </div>

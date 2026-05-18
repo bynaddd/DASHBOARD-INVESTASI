@@ -577,17 +577,70 @@ function renderSummary() {
     }
   });
 
-  const total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
-  const totalPrincipal = totalIn - totalOut;
+  const activeRange = document.querySelector('#dashboardTimeFilter button.active') ? document.querySelector('#dashboardTimeFilter button.active').dataset.range : 'latest';
+  const isFiltered = activeRange !== 'latest';
+
+  if (isFiltered) {
+    monthIn = totalIn;
+    monthOut = totalOut;
+    lastMonthIn = 0;
+    lastMonthOut = 0;
+  }
+
+  let total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
+  let totalPrincipal = totalIn - totalOut;
+
+  if (isFiltered) {
+     const range = document.querySelector('#dashboardTimeFilter button.active').dataset.range;
+     const year = parseInt(document.getElementById('dashboardYearSelect').value);
+     const month = parseInt(document.getElementById('dashboardMonthSelect').value);
+     const endStr = document.getElementById('dashboardEndDate').value;
+     
+     let filterEndDate = new Date();
+     if (range === 'yearly') {
+       filterEndDate = new Date(year, 11, 31, 23, 59, 59);
+     } else if (range === 'monthly') {
+       filterEndDate = new Date(year, month + 1, 0, 23, 59, 59);
+     } else if (range === 'custom') {
+       if (endStr) {
+         filterEndDate = new Date(endStr);
+         filterEndDate.setHours(23, 59, 59);
+       }
+     }
+
+     const cumulativeData = allData.filter(d => d.date && d.date <= filterEndDate);
+     let cumIn = 0, cumOut = 0;
+     const emps = {};
+     const sorted = [...cumulativeData].sort((a,b)=>a.date-b.date);
+     sorted.forEach(d => {
+       if (d.type === 'Tabungan') cumIn += d.nominal;
+       else cumOut += d.nominal;
+       
+       const id = getEmpId(d);
+       if (!emps[id]) emps[id] = { balance: 0, lastDate: null };
+       let interest = 0;
+       if (emps[id].lastDate && d.date > emps[id].lastDate && emps[id].balance > 0) {
+         const diffMonths = (d.date.getFullYear() - emps[id].lastDate.getFullYear()) * 12 + (d.date.getMonth() - emps[id].lastDate.getMonth());
+         if (diffMonths > 0) interest = emps[id].balance * 0.0025 * diffMonths;
+       }
+       if (d.type === 'Tabungan') emps[id].balance += interest + d.nominal;
+       else { emps[id].balance -= d.nominal; interest = 0; }
+       emps[id].lastDate = d.date;
+     });
+     total = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
+     totalPrincipal = cumIn - cumOut;
+  }
+
   const netFlow = monthIn - monthOut;
   const lastNetFlow = lastMonthIn - lastMonthOut;
 
   // Update Labels to reflect Reference Month
   const refMonthName = monthNames[cm].toUpperCase() + ' ' + cy;
+  const isAll = activeRange === 'all';
   const labelMap = {
-    'kpiSetoranLabel': `SETORAN (${refMonthName})`,
-    'kpiPenarikanLabel': `PENARIKAN (${refMonthName})`,
-    'kpiNetGrowthLabel': `NET GROWTH (${refMonthName})`
+    'kpiSetoranLabel': isAll ? `TOTAL SETORAN (SEMUA WAKTU)` : (isFiltered ? `TOTAL SETORAN (FILTERED)` : `SETORAN (${refMonthName})`),
+    'kpiPenarikanLabel': isAll ? `TOTAL PENARIKAN (SEMUA WAKTU)` : (isFiltered ? `TOTAL PENARIKAN (FILTERED)` : `PENARIKAN (${refMonthName})`),
+    'kpiNetGrowthLabel': isAll ? `CASHFLOW NET (SEMUA WAKTU)` : (isFiltered ? `CASHFLOW NET (FILTERED)` : `CASHFLOW NET (${refMonthName})`)
   };
   Object.entries(labelMap).forEach(([id, text]) => {
     const el = document.getElementById(id);
@@ -627,13 +680,7 @@ function renderSummary() {
     kpiNetGrowthTrend.innerHTML = `<span class="trend-badge ${isDeficit ? 'down' : 'up'}"><i class="fas fa-arrow-${isDeficit ? 'down' : 'up'}"></i> ${isDeficit ? 'Defisit' : 'Surplus'}</span>`;
   }
 
-  const netGrowthEl = document.getElementById('kpiNetGrowth');
-  if (netGrowthEl) netGrowthEl.textContent = fmt(total - totalPrincipal);
-  
-  const trendNetEl = document.getElementById('kpiNetGrowthTrend');
-  if (trendNetEl) {
-    trendNetEl.innerHTML = `<span class="trend-badge up"><i class="fas fa-chart-line"></i> +3% Fixed</span> compounding`;
-  }
+
 }
 
 
@@ -683,7 +730,7 @@ function renderHealthAnalytics() {
   insights.push(`<i class="fas fa-shield-alt"></i> Tingkat Pemulihan Transaksi Bermasalah: <b>${recoveryRate}%</b>.`);
   
   if (dormantCount > 5) insights.push(`<i class="fas fa-user-clock"></i> ${dormantCount} karyawan tidak menabung > 3 bulan.`);
-  insights.push(`<i class="fas fa-calendar-check"></i> Aktivitas setoran memuncak pada minggu pertama setiap bulan.`);
+
 
   document.getElementById('aiInsightList').innerHTML = insights.map(i => `<li class="ai-insight-item">${i}</li>`).join('');
 }
@@ -2936,8 +2983,37 @@ function renderAnalyticsContent() {
     }
   }
 
+  let filterEndDate = new Date();
+  if (range === 'yearly') {
+    filterEndDate = new Date(year, 11, 31, 23, 59, 59);
+  } else if (range === 'monthly') {
+    filterEndDate = new Date(year, month + 1, 0, 23, 59, 59);
+  } else if (range === 'custom') {
+    if (endStr) {
+      filterEndDate = new Date(endStr);
+      filterEndDate.setHours(23, 59, 59);
+    }
+  }
+
+  const cumulativeData = allData.filter(d => d.date && d.date <= filterEndDate);
+  const emps = {};
+  const sorted = [...cumulativeData].sort((a,b)=>a.date-b.date);
+  sorted.forEach(d => {
+    const id = typeof getEmpId === 'function' ? getEmpId(d) : (d.nik || d.name);
+    if (!emps[id]) emps[id] = { balance: 0, lastDate: null };
+    let interest = 0;
+    if (emps[id].lastDate && d.date > emps[id].lastDate && emps[id].balance > 0) {
+      const diffMonths = (d.date.getFullYear() - emps[id].lastDate.getFullYear()) * 12 + (d.date.getMonth() - emps[id].lastDate.getMonth());
+      if (diffMonths > 0) interest = emps[id].balance * 0.0025 * diffMonths;
+    }
+    if (d.type === 'Tabungan') emps[id].balance += interest + d.nominal;
+    else { emps[id].balance -= d.nominal; interest = 0; }
+    emps[id].lastDate = d.date;
+  });
+  const totalSaldoWithInterest = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
+
   // CALCULATE KPI CATEGORIES
-  renderFinancialKpis(filtered, anomFiltered);
+  renderFinancialKpis(filtered, anomFiltered, totalSaldoWithInterest);
   renderBehavioralKpis(filtered, anomFiltered);
   renderOperationalKpis(filtered, anomFiltered);
   
@@ -2953,7 +3029,7 @@ function renderAnalyticsContent() {
 
 }
 
-function renderFinancialKpis(data, anoms) {
+function renderFinancialKpis(data, anoms, totalSaldoWithInterest = 0) {
   const totalIn = data.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
   const totalOut = data.filter(d => d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
   
@@ -2966,12 +3042,14 @@ function renderFinancialKpis(data, anoms) {
   const recoveryRate = totalInitialLoss > 0 ? (recovery / totalInitialLoss * 100) : 100; // Default to 100% if no losses
 
   const kpis = [
-    { label: 'Total Investasi', val: fmt(totalIn), icon: 'fa-hand-holding-usd', cls: 'blue' },
-    { label: 'Total Penarikan', val: fmt(totalOut), icon: 'fa-external-link-alt', cls: 'indigo' },
-    { label: 'Total Over-Withdraw', val: fmt(totalInitialLoss), icon: 'fa-exclamation-circle', cls: 'orange' },
-    { label: 'Kerugian Terbukti', val: fmt(provenLoss), icon: 'fa-shield-alt', cls: 'red' },
-    { label: 'Total Recovery', val: fmt(recovery), icon: 'fa-redo', cls: 'green' },
-    { label: 'Recovery Rate %', val: recoveryRate.toFixed(1) + '%', icon: 'fa-percent', cls: 'cyan' }
+    { label: 'TOTAL (MODAL + BUNGA)', val: fmt(totalSaldoWithInterest), icon: 'fa-wallet', cls: 'indigo', sub: 'Akumulasi riil hingga akhir periode filter' },
+    { label: 'SAAT INI (YANG DIPEGANG)', val: fmt(totalIn - totalOut), icon: 'fa-hand-holding-usd', cls: 'blue', sub: 'Sisa Modal Pokok murni (Masuk - Ditarik)' },
+    { label: 'Total Uang Masuk', val: fmt(totalIn), icon: 'fa-arrow-down', cls: 'green', sub: 'Hanya Modal Pokok / Setoran (Tanpa Bunga)' },
+    { label: 'Total Penarikan', val: fmt(totalOut), icon: 'fa-external-link-alt', cls: 'amber', sub: 'Total akumulasi penarikan dana' },
+    { label: 'Total Over-Withdraw', val: fmt(totalInitialLoss), icon: 'fa-exclamation-circle', cls: 'orange', sub: 'Potensi defisit penarikan awal' },
+    { label: 'Kerugian Terbukti', val: fmt(provenLoss), icon: 'fa-shield-alt', cls: 'red', sub: 'Total kerugian (fraud) yang terkonfirmasi' },
+    { label: 'Total Recovery', val: fmt(recovery), icon: 'fa-redo', cls: 'green', sub: 'Dana kerugian yang berhasil dipulihkan' },
+    { label: 'Recovery Rate %', val: recoveryRate.toFixed(1) + '%', icon: 'fa-percent', cls: 'cyan', sub: 'Rasio keberhasilan pemulihan kerugian' }
   ];
 
   document.getElementById('analyticsFinancialKpis').innerHTML = kpis.map(k => `
@@ -2981,6 +3059,7 @@ function renderFinancialKpis(data, anoms) {
         <div class="card-label">${k.label}</div>
       </div>
       <div class="card-value" style="font-size: 1.2rem;">${k.val}</div>
+      ${k.sub ? `<div style="font-size: 0.7rem; color: #94a3b8; margin-top: 8px; font-weight: 500; line-height: 1.3;"><i class="fas fa-info-circle" style="color: #cbd5e1; margin-right: 4px;"></i>${k.sub}</div>` : ''}
     </div>
   `).join('');
 }
@@ -3198,7 +3277,8 @@ function exportAnalyticsReport() {
   const kpiData = [
     ["METRIK ANALYTICS", "NILAI"],
     ["Periode Laporan", range.toUpperCase()],
-    ["Total Investasi Masuk", totalIn],
+    ["SAAT INI (YANG DIPEGANG)", totalIn - totalOut],
+    ["Total Uang Masuk", totalIn],
     ["Total Penarikan", totalOut],
     ["Potensi Kerugian (Initial)", initialLoss],
     ["Sisa Kerugian (Remaining)", remainingLoss],
