@@ -1097,14 +1097,25 @@ function calculateAnomalies() {
       const activeReview = review || correctionReview;
       const txKey = activeReview ? activeReview.txKey : txKeyNik;
       
-      // Simpan Nama Asli dari Identity Audit Trail (Lokal per Transaksi)
+      // Simpan Nama Asli dari Identity Audit Trail (Global untuk yang lain, Lokal untuk A. Maksum)
       let originalName = t.name;
+      const isMaksum = t.name.toLowerCase().includes('maksum') || t.nik === '3525161506750122';
+      if (!isMaksum) {
+        originalName = globalNameAudit[t.nik] || globalNameAudit[t.name] || t.name;
+      }
       
       // Jika di review ini ada info nama asli yang lebih spesifik, gunakan itu
       if (activeReview && activeReview.txKey) {
         const parts = activeReview.txKey.split('_');
         if (parts.length >= 4) {
-          const nameFromKey = parts.slice(1, -2).join(' ');
+          let nameFromKey = parts.slice(1, -2).join(' ');
+          
+          // Resolusi NIK ke Nama asli jika tersimpan dalam format NIK
+          const foundEmp = allEmployees.find(e => e.nik === nameFromKey);
+          if (foundEmp) {
+            nameFromKey = foundEmp.name;
+          }
+          
           // Pastikan ini bukan NIK dan memang berbeda dengan nama saat ini
           if (nameFromKey !== t.name && nameFromKey !== t.nik) {
             originalName = nameFromKey;
