@@ -262,7 +262,7 @@ function calculateWithdrawalBreakdown(filteredData) {
 // ===== FETCH DATA DARI API SERVERLESS =====
 async function fetchData() {
   try {
-    const r = await fetch(API_URL);
+    const r = await fetch(API_URL + '?t=' + Date.now());
     const json = await r.json();
     if (!json.success) {
       const msg = json.message || json.error || 'API error';
@@ -272,7 +272,7 @@ async function fetchData() {
 
     // Fetch Review Logs
     try {
-      const rRev = await fetch(API_URL + '?type=review');
+      const rRev = await fetch(API_URL + '?type=review&t=' + Date.now());
       const jsonRev = await rRev.json();
       if (jsonRev.success) allReviews = jsonRev.data || [];
     } catch (e) {
@@ -1697,7 +1697,7 @@ async function saveReview() {
       // Perform automatic updates based on status
       const anomali = allAnomalies.find(a => a.txKey === currentReviewTxKey);
 
-      if (status === 'Salah Orang' && (correctName || correctNik)) {
+      if ((status === 'Salah Orang' || status === 'SALAH INPUT') && (correctName || correctNik)) {
         // Update main transaction row with the new owner
         fetch(API_URL, {
           method: 'POST',
@@ -2059,7 +2059,7 @@ function renderTxTable() {
     const editedBadge = d.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${d.notes || '-'}">DIEDIT</span>` : '';
     
     const reviewData = allReviews.find(r => r.txKey === txKey);
-    const correctedBadge = (reviewData && reviewData.status === 'Salah Orang') ? `<span class="badge-status status-verified" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; vertical-align: middle;" title="Koreksi Nama dari data sebelumnya\nAdmin: ${reviewData.reviewer}">NAMA DIKOREKSI</span>` : '';
+    const correctedBadge = (reviewData && (reviewData.status === 'Salah Orang' || reviewData.status === 'SALAH INPUT')) ? `<span class="badge-status status-verified" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; vertical-align: middle;" title="Koreksi Nama dari data sebelumnya\nAdmin: ${reviewData.reviewer}">NAMA DIKOREKSI</span>` : '';
 
     return `<tr style="${highlightBg}">
     <td>${alertIcon}${start + i + 1}</td><td>${d.dateStr || fmtDate(d.date)}</td><td>${d.name}${editedBadge}${correctedBadge}</td><td>${d.jenis}</td>

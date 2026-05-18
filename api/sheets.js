@@ -6,6 +6,7 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -169,7 +170,7 @@ module.exports = async (req, res) => {
         const timestamp = new Date().toISOString();
         
         // Security check for mutation
-        if (status === 'Salah Orang' && (!req.body.pass || req.body.pass !== adminPass)) {
+        if ((status === 'Salah Orang' || status === 'SALAH INPUT') && (!req.body.pass || req.body.pass !== adminPass)) {
           return res.status(401).json({ success: false, error: 'Password Admin diperlukan untuk koreksi nama!' });
         }
         
