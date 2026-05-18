@@ -1097,9 +1097,8 @@ function calculateAnomalies() {
       const activeReview = review || correctionReview;
       const txKey = activeReview ? activeReview.txKey : txKeyNik;
       
-      // Simpan Nama Asli dari Identity Audit Trail (Global)
-      // Cari berdasarkan NIK atau Nama saat ini
-      let originalName = globalNameAudit[t.nik] || globalNameAudit[t.name] || t.name;
+      // Simpan Nama Asli dari Identity Audit Trail (Lokal per Transaksi)
+      let originalName = t.name;
       
       // Jika di review ini ada info nama asli yang lebih spesifik, gunakan itu
       if (activeReview && activeReview.txKey) {
@@ -2058,8 +2057,8 @@ function renderTxTable() {
 
     const editedBadge = d.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${d.notes || '-'}">DIEDIT</span>` : '';
     
-    const reviewData = allReviews.find(r => r.txKey === txKey);
-    const correctedBadge = (reviewData && (reviewData.status === 'Salah Orang' || reviewData.status === 'SALAH INPUT')) ? `<span class="badge-status status-verified" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; vertical-align: middle;" title="Koreksi Nama dari data sebelumnya\nAdmin: ${reviewData.reviewer}">NAMA DIKOREKSI</span>` : '';
+    const anom = allAnomalies.find(a => a.originalNo === d.sheetRow);
+    const correctedBadge = (anom && anom.originalName && anom.originalName !== anom.name) ? `<span class="badge-status status-verified" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; vertical-align: middle;" title="Koreksi Nama dari data sebelumnya: ${anom.originalName}\nAdmin: ${anom.reviewer || '-'}">NAMA DIKOREKSI</span>` : '';
 
     return `<tr style="${highlightBg}">
     <td>${alertIcon}${start + i + 1}</td><td>${d.dateStr || fmtDate(d.date)}</td><td>${d.name}${editedBadge}${correctedBadge}</td><td>${d.jenis}</td>
