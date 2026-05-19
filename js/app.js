@@ -18,7 +18,7 @@ function checkLogin() {
 
 function applyAccessControl() {
   const isAdmin = currentUser && currentUser.role === 'admin';
-  const adminLinks = ['nav-admin', 'nav-anomali'];
+  const adminLinks = ['nav-admin'];
 
   // Update User Info Display
   const nameEl = document.getElementById('userNameDisplay');
@@ -218,7 +218,7 @@ function toast(msg, type = 'info') { const t = document.createElement('div'); t.
 let allAliasesMap = {}; // Global map for NIK to variations
 
 /**
- * Menghitung rincian penarikan (Modal, Bunga, Salah, Mencurigakan)
+ * Menghitung rincian penarikan (Modal, Bunga, Salah, Meragukan)
  * @param {Array} filteredData - Data yang ingin dihitung rinciannya (biasanya data bulan ini atau terfilter)
  * @returns {Object} { modal, bunga, salah, suspicious }
  */
@@ -1031,7 +1031,7 @@ function renderRecentTable(query = '') {
       <td>${d.jenis}</td>
       <td style="font-weight:800; color: ${d.type === 'Tabungan' ? 'var(--success)' : 'var(--danger)'}">${fmt(d.nominal)}</td>
       <td><span class="badge ${badgeCls}">${d.type}</span></td>
-      <td><button class="btn btn-outline" style="padding: 6px 12px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${d.nik}')">Detail</button></td>
+      <td><button class="btn btn-outline" style="padding: 6px 12px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${d.nik}')" title="Detail"><i class="fas fa-search"></i></button></td>
     </tr>`;
   }).join('');
 }
@@ -1447,7 +1447,7 @@ function renderAnomaliTable() {
       const sysStatusColor = a.systemStatus === 'MENCURIGAKAN' ? '#ef4444' : (a.systemStatus === 'DICICIL' ? '#f59e0b' : '#10b981');
       
       const isAdmin = currentUser && currentUser.role === 'admin';
-      const reviewBtn = isAdmin ? `<button class="btn btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="openReviewModal('${a.txKey}')"><i class="fas fa-clipboard-check"></i> Review</button>` : '';
+      const reviewBtn = isAdmin ? `<button class="btn btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="openReviewModal('${a.txKey}')" title="Review"><i class="fas fa-clipboard-check"></i></button>` : '';
 
       let noteContent = a.notes;
       if (a.status === 'SALAH INPUT' && (a.correctName || a.correctNik)) {
@@ -1472,7 +1472,7 @@ function renderAnomaliTable() {
         <td style="color:#ef4444; font-weight:600;">${fmt(a.nominal)}</td>
         <td style="color:#334155;">${fmt(a.balanceBefore)}</td>
         <td style="color:#ef4444; font-weight:700;">
-          <div style="font-size:0.8rem; opacity:0.8;">Hutang Awal:</div>
+          <div style="font-size:0.8rem; opacity:0.8;">Selisih:</div>
           <div>${fmt(a.initialDebt)}</div>
           ${a.remainingDebt < a.initialDebt && a.remainingDebt > 0 ? `<div style="font-size:0.7rem; color:#f59e0b; font-weight:600; margin-top:4px;">Sisa Cicilan: ${fmt(a.remainingDebt)}</div>` : ''}
         </td>
@@ -1480,7 +1480,7 @@ function renderAnomaliTable() {
         <td><span class="badge-status ${statusClass}">${a.status}</span></td>
         <td style="display: flex; gap: 4px;">
           ${reviewBtn}
-          <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${empNik}')"><i class="fas fa-search"></i> Detail</button>
+          <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${empNik}')" title="Detail"><i class="fas fa-search"></i></button>
         </td>
         <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;" title="${noteContent}">${noteContent}</td>
         <td style="font-size: 0.8rem; color: #64748b;">${a.reviewer}</td>
@@ -1894,15 +1894,20 @@ function initDashboardFilter() {
         toast('Tidak ada data dashboard untuk di-export', 'error');
         return;
       }
-      const exportData = globalFilteredData.map((d, i) => ({
-        No: i + 1,
-        Tanggal: d.dateStr || fmtDate(d.date),
-        Karyawan: d.name,
-        'Jenis Potongan': d.jenis,
-        Nominal: d.nominal,
-        Tipe: d.type,
-        Keterangan: d.keterangan
-      }));
+      const exportData = globalFilteredData.map((d, i) => {
+        const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
+        const isSuspicious = allAnomalies.some(a => a.txKey === txKey && (a.status === 'MENUNGGU REVIEW' || a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL'));
+        return {
+          No: i + 1,
+          Tanggal: d.dateStr || fmtDate(d.date),
+          Karyawan: d.name,
+          'Jenis Potongan': d.jenis,
+          Nominal: d.nominal,
+          Tipe: d.type,
+          Keterangan: d.keterangan,
+          'Transaksi Meragukan': isSuspicious ? 'Ya' : 'Tidak'
+        };
+      });
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "DashboardData");
@@ -1919,15 +1924,20 @@ function initDashboardFilter() {
         toast('Tidak ada data transaksi untuk di-export', 'error');
         return;
       }
-      const exportData = txData.map((d, i) => ({
-        No: i + 1,
-        Tanggal: d.dateStr || fmtDate(d.date),
-        Karyawan: d.name,
-        'Jenis Potongan': d.jenis,
-        Nominal: d.nominal,
-        Tipe: d.type,
-        Keterangan: d.keterangan
-      }));
+      const exportData = txData.map((d, i) => {
+        const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
+        const isSuspicious = allAnomalies.some(a => a.txKey === txKey && (a.status === 'MENUNGGU REVIEW' || a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL'));
+        return {
+          No: i + 1,
+          Tanggal: d.dateStr || fmtDate(d.date),
+          Karyawan: d.name,
+          'Jenis Potongan': d.jenis,
+          Nominal: d.nominal,
+          Tipe: d.type,
+          Keterangan: d.keterangan,
+          'Transaksi Meragukan': isSuspicious ? 'Ya' : 'Tidak'
+        };
+      });
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Transaksi");
@@ -2100,7 +2110,7 @@ function renderTxTable() {
           <td style="color:#10b981;">${fmt(m.totalIn)}</td>
           <td style="color:#ef4444;">${fmt(m.totalOut)}</td>
           <td style="font-weight:700; color:${netColor};">${fmt(net)}</td>
-          <td><button class="btn btn-outline" style="padding: 2px 8px; font-size:0.7rem;" onclick="txFilterMode.value='custom'; txFilterStartMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterEndMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterMode.dispatchEvent(new Event('change'));"><i class="fas fa-search"></i> Detail</button></td>
+          <td><button class="btn btn-outline" style="padding: 2px 8px; font-size:0.7rem;" onclick="txFilterMode.value='custom'; txFilterStartMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterEndMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterMode.dispatchEvent(new Event('change'));" title="Detail"><i class="fas fa-search"></i></button></td>
         </tr>
       `;
     }).join('');
@@ -2134,7 +2144,7 @@ function renderTxTable() {
     <td><span class="badge ${d.type === 'Tabungan' ? 'in' : 'out'}">${d.type}</span> ${linkBtn}</td>
     <td>
       ${editBtn}
-      <button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem;" onclick="goToEmployee('${escName}', '${empNik}')"><i class="fas fa-search"></i> Detail</button>
+      <button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem;" onclick="goToEmployee('${escName}', '${empNik}')" title="Detail"><i class="fas fa-search"></i></button>
     </td>
     </tr>`;
   }).join('');
@@ -2550,14 +2560,22 @@ function showEmployee(name, nik = '') {
     let lastProcessedDate = sortedTxs[0]?.date;
     
     sortedTxs.forEach(tx => {
-      const diffMonths = (tx.date.getFullYear() - lastProcessedDate.getFullYear()) * 12 + (tx.date.getMonth() - lastProcessedDate.getMonth());
-      if (diffMonths > 0 && currentPrincipal > 0) {
-        const pending = currentPrincipal * monthlyRate * diffMonths;
+      let pending = 0;
+      if (lastProcessedDate && tx.date > lastProcessedDate && currentPrincipal > 0) {
+        const diffMonths = (tx.date.getFullYear() - lastProcessedDate.getFullYear()) * 12 + (tx.date.getMonth() - lastProcessedDate.getMonth());
+        if (diffMonths > 0) {
+          pending = currentPrincipal * monthlyRate * diffMonths;
+        }
+      }
+      if (tx.type === 'Tabungan') {
         currentPrincipal += pending;
         exactBunga += pending;
+        currentPrincipal += tx.nominal;
+        accPrincipal += tx.nominal;
+      } else {
+        currentPrincipal -= tx.nominal;
+        accPrincipal -= tx.nominal;
       }
-      if (tx.type === 'Tabungan') { currentPrincipal += tx.nominal; accPrincipal += tx.nominal; }
-      else { currentPrincipal -= tx.nominal; accPrincipal -= tx.nominal; }
       labels.push(monthNames[tx.date.getMonth()] + ' ' + tx.date.getFullYear());
       balanceData.push(currentPrincipal);
       principalData.push(accPrincipal);
@@ -2642,7 +2660,7 @@ function showEmployee(name, nik = '') {
       <div style="display: flex; justify-content: space-between;"><span>Modal:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.modal)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>Bunga:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.bunga)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>Selisih Terbukti:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
-      <div style="display: flex; justify-content: space-between;"><span>Transaksi Mencurigakan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Transaksi Meragukan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
     </div>
   `;
 
@@ -2724,7 +2742,7 @@ function showEmployee(name, nik = '') {
     pieData.push({ value: lifeBrk.salah, name: 'Selisih Terbukti', itemStyle: { color: '#ef4444' } });
   }
   if (lifeBrk.suspicious > 0) {
-    pieData.push({ value: lifeBrk.suspicious, name: 'Transaksi Mencurigakan', itemStyle: { color: '#8b5cf6' } });
+    pieData.push({ value: lifeBrk.suspicious, name: 'Transaksi Meragukan', itemStyle: { color: '#8b5cf6' } });
   }
 
   charts.empPie.setOption({
@@ -2872,16 +2890,18 @@ function showEmployee(name, nik = '') {
     const isAdmin = currentUser && currentUser.role === 'admin';
     const editBtn = (isAdmin && row.type === 'Penarikan') ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-left: 4px;" onclick="openEditModal(${row.sheetRow}, '${row.name.replace(/'/g, "\\'")}', ${row.nominal}, '${row.nik || ''}', '${row.type}', '${row.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
 
+    const rowColorStyle = row.balance < 0 ? 'color: #ef4444;' : '';
+
     return `
-    <tr style="${row.highlightBg}">
-      <td style="font-size: 0.8rem; color: #64748b; font-weight: 500;">${idx + 1}</td>
-      <td>${row.alertIcon}${row.dateStr}${editedBadge}</td>
-      <td style="font-size: 0.8rem; color: #64748b; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.name}">${row.name}</td>
-      <td>${row.jenis}${row.linkBtn}</td>
-      <td style="font-weight:600">${fmt(row.nominal)}</td>
+    <tr style="${row.highlightBg} ${rowColorStyle}">
+      <td style="font-size: 0.8rem; color: ${row.balance < 0 ? '#ef4444' : '#64748b'}; font-weight: 500;">${idx + 1}</td>
+      <td style="color: ${row.balance < 0 ? '#ef4444' : ''};">${row.alertIcon}${row.dateStr}${editedBadge}</td>
+      <td style="font-size: 0.8rem; color: ${row.balance < 0 ? '#ef4444' : '#64748b'}; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.name}">${row.name}</td>
+      <td style="color: ${row.balance < 0 ? '#ef4444' : ''};">${row.jenis}${row.linkBtn}</td>
+      <td style="font-weight:600; color: ${row.balance < 0 ? '#ef4444' : ''};">${fmt(row.nominal)}</td>
       <td><span class="badge ${row.type === 'Tabungan' ? 'in' : 'out'}">${row.type}</span></td>
-      <td style="color:#f59e0b; font-weight:600;">${row.bungaDisplay}</td>
-      <td style="font-weight:700; color:#334155;">${fmt(row.balance)}</td>
+      <td style="color:${row.balance < 0 ? '#ef4444' : '#f59e0b'}; font-weight:600;">${row.bungaDisplay}</td>
+      <td style="font-weight:700; color:${row.balance < 0 ? '#ef4444' : '#334155'};">${fmt(row.balance)}</td>
       <td>${editBtn}</td>
     </tr>
   `}).join('');
@@ -3410,7 +3430,7 @@ function exportAnalyticsReport() {
     Karyawan: a.name,
     NIK: a.nik || '-',
     'Nominal Transaksi': a.nominal,
-    'Defisit Awal': a.initialDebt,
+    'Selisih': a.initialDebt,
     'Sisa Cicilan': a.remainingDebt,
     Status: a.status,
     Sistem: a.systemStatus,
@@ -4071,7 +4091,7 @@ function exportAnomaliData() {
       Alias: aliases,
       'Nominal Penarikan': a.nominal,
       'Saldo Sebelum': a.balanceBefore,
-      'Hutang Awal': a.initialDebt,
+      'Selisih': a.initialDebt,
       'Sisa Hutang': a.remainingDebt,
       'Status Sistem': a.systemStatus,
       'Status Review': a.status,
@@ -4105,6 +4125,11 @@ window.exportEmployeeData = function() {
   const historyRows = Array.from(document.querySelectorAll('#empTable tbody tr')).map(tr => {
     const tds = tr.querySelectorAll('td');
     if (tds.length < 8) return null; // Skip empty/invalid rows
+    const isSuspicious = tr.innerHTML.includes('fa-exclamation-triangle') || tr.innerHTML.includes('Meragukan');
+    const isTerbukti = tr.innerHTML.includes('fa-exclamation-circle') || tr.innerHTML.includes('Terbukti');
+    let statusText = 'Tidak';
+    if (isSuspicious || isTerbukti) statusText = 'Ya';
+    
     return {
       No: tds[0].innerText.trim(),
       Tanggal: tds[1].innerText.replace('DIEDIT', '').trim(),
@@ -4113,7 +4138,8 @@ window.exportEmployeeData = function() {
       Nominal: tds[4].innerText.trim(),
       Tipe: tds[5].innerText.trim(),
       'Bunga bulan sebelumnya': tds[6].innerText.trim(),
-      'Kumulatif (+BUNGA)': tds[7].innerText.trim()
+      'Kumulatif (+BUNGA)': tds[7].innerText.trim(),
+      'Transaksi Meragukan': statusText
     };
   }).filter(Boolean);
 
