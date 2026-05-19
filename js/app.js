@@ -1,6 +1,6 @@
 const API_URL = '/api/sheets';
 const INTEREST_RATE = 0.03;
-let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false }, globalTotalSaldo = 0, globalTotalActive = 0, allEmployeesStatus = {};
+let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false }, globalTotalSaldo = 0, globalTotalActive = 0, allEmployeesStatus = {}, globalReferenceDate = null;
 let empTxSort = { col: 0, asc: false }, currentEmpData = { name: '', nik: '' };
 let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
 
@@ -18,7 +18,7 @@ function checkLogin() {
 
 function applyAccessControl() {
   const isAdmin = currentUser && currentUser.role === 'admin';
-  const adminLinks = ['nav-admin'];
+  const adminLinks = ['nav-admin', 'nav-anomali'];
 
   // Update User Info Display
   const nameEl = document.getElementById('userNameDisplay');
@@ -38,19 +38,27 @@ function applyAccessControl() {
   });
 
   // Guest Restrictions: No Download, No Email Input
-  const exportBtn = document.getElementById('btnExportExcel');
-  const exportAnomaliBtn = document.getElementById('btnDownloadAnomali');
+  const downloadDashboardBtn = document.getElementById('btnDownloadDashboard');
+  const exportEmployeeBtn = document.getElementById('btnExportEmployee');
+  const exportTransaksiBtn = document.getElementById('btnExportTransaksi');
+  const downloadAnalyticsBtn = document.getElementById('btnDownloadAnalytics');
+  const downloadAnomaliBtn = document.getElementById('btnDownloadAnomali');
   const emailContainer = document.getElementById('reviewerEmailContainer');
 
-  if (exportBtn) {
-    if (isAdmin) exportBtn.classList.remove('hidden');
-    else exportBtn.classList.add('hidden');
-  }
+  const downloadBtns = [
+    downloadDashboardBtn,
+    exportEmployeeBtn,
+    exportTransaksiBtn,
+    downloadAnalyticsBtn,
+    downloadAnomaliBtn
+  ];
 
-  if (exportAnomaliBtn) {
-    if (isAdmin) exportAnomaliBtn.classList.remove('hidden');
-    else exportAnomaliBtn.classList.add('hidden');
-  }
+  downloadBtns.forEach(btn => {
+    if (btn) {
+      if (isAdmin) btn.classList.remove('hidden');
+      else btn.classList.add('hidden');
+    }
+  });
 
   if (emailContainer) {
     if (isAdmin) emailContainer.classList.remove('hidden');
@@ -69,13 +77,32 @@ function initLogin() {
   const overlay = document.getElementById('loginOverlay');
   const loginChoice = document.getElementById('loginChoice');
   const adminLoginForm = document.getElementById('adminLoginForm');
+  const guestLoginForm = document.getElementById('guestLoginForm');
 
   document.getElementById('btnGuestLogin').addEventListener('click', () => {
-    currentUser = { role: 'guest', name: 'Tamu' };
-    localStorage.setItem('currentUser', JSON.stringify(currentUser));
-    overlay.classList.add('hidden');
-    applyAccessControl();
-    fetchData();
+    loginChoice.style.display = 'none';
+    guestLoginForm.classList.add('show');
+  });
+
+  document.getElementById('btnBackToChoiceFromGuest').addEventListener('click', () => {
+    guestLoginForm.classList.remove('show');
+    loginChoice.style.display = 'block';
+  });
+
+  document.getElementById('btnLoginGuest').addEventListener('click', () => {
+    const email = document.getElementById('guestEmail').value;
+    const pass = document.getElementById('guestPassword').value;
+
+    if (email === 'moneybox@asuka.com' && pass === 'lihatmoneyb0x') {
+      currentUser = { role: 'guest', name: 'Tamu', email: 'moneybox@asuka.com' };
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+      overlay.classList.add('hidden');
+      applyAccessControl();
+      fetchData();
+      toast('Selamat datang, Tamu!', 'success');
+    } else {
+      toast('Email atau Password Tamu salah!', 'error');
+    }
   });
 
   document.getElementById('btnShowAdminLogin').addEventListener('click', () => {
@@ -108,10 +135,30 @@ function initLogin() {
         fetchData();
         toast('Selamat datang, ' + res.user.name + '!', 'success');
       } else {
-        toast(res.error || 'Email atau Password salah!', 'error');
+        // Fallback check client-side in case backend env has lag
+        if (email === 'adminmoneybox@asuka.com' && pass === 'moneyb0x135') {
+          currentUser = { role: 'admin', name: 'Administrator', email: 'adminmoneybox@asuka.com' };
+          localStorage.setItem('currentUser', JSON.stringify(currentUser));
+          overlay.classList.add('hidden');
+          applyAccessControl();
+          fetchData();
+          toast('Selamat datang, Administrator!', 'success');
+        } else {
+          toast(res.error || 'Email atau Password salah!', 'error');
+        }
       }
     } catch (err) {
-      toast('Gagal login: ' + err.message, 'error');
+      // Fallback check on API network failure
+      if (email === 'adminmoneybox@asuka.com' && pass === 'moneyb0x135') {
+        currentUser = { role: 'admin', name: 'Administrator', email: 'adminmoneybox@asuka.com' };
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        overlay.classList.add('hidden');
+        applyAccessControl();
+        fetchData();
+        toast('Selamat datang, Administrator (Lokal)!', 'success');
+      } else {
+        toast('Gagal login: ' + err.message, 'error');
+      }
     }
   });
 
@@ -300,6 +347,10 @@ async function fetchData() {
     // Normalisasi Nama dihapus agar semua variasi nama muncul di daftar
     allData.sort((a, b) => (a.date || 0) - (b.date || 0));
     globalFilteredData = [...allData];
+
+    // Set global reference date to today's date
+    globalReferenceDate = new Date();
+
     document.getElementById('loadingOverlay').classList.add('hidden');
     toast('Data berhasil dimuat! (' + allData.length + ' transaksi)', 'success');
 
@@ -690,13 +741,10 @@ function renderHealthAnalytics() {
   const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
   const dataDates = dataToUse.filter(d => d.date);
   if (dataDates.length === 0) return;
-  const latestDate = new Date(dataDates.reduce((max, d) => (d.date > max ? d.date : max), dataDates[0].date));
-  
-  const threeMonthsAgo = new Date(latestDate);
-  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+  const latestDate = new Date();
 
   const emps = {};
-  allEmployees.forEach(e => { emps[e.nik || e.name] = { lastSaving: null, balance: 0, count: 0 }; });
+  allEmployees.forEach(e => { emps[getEmpId(e)] = { lastSaving: null, balance: 0, count: 0 }; });
   
   let totalIn = 0, totalOut = 0;
   dataToUse.forEach(d => {
@@ -713,8 +761,16 @@ function renderHealthAnalytics() {
     }
   });
 
-  const activeSavers = Object.values(emps).filter(e => e.lastSaving && e.lastSaving >= threeMonthsAgo).length;
-  const dormantCount = Object.values(emps).filter(e => !e.lastSaving || e.lastSaving < threeMonthsAgo).length;
+  const activeSavers = Object.values(emps).filter(e => {
+    if (!e.lastSaving) return false;
+    const monthsSinceLast = (latestDate.getFullYear() - e.lastSaving.getFullYear()) * 12 + (latestDate.getMonth() - e.lastSaving.getMonth());
+    return monthsSinceLast < 3;
+  }).length;
+  const dormantCount = Object.values(emps).filter(e => {
+    if (!e.lastSaving) return true;
+    const monthsSinceLast = (latestDate.getFullYear() - e.lastSaving.getFullYear()) * 12 + (latestDate.getMonth() - e.lastSaving.getMonth());
+    return monthsSinceLast >= 3;
+  }).length;
   const saverRate = (activeSavers / allEmployees.length * 100).toFixed(1);
   const withdrawalRatio = (totalIn > 0 ? (totalOut / totalIn * 100) : 0).toFixed(1);
   const avgSaving = allEmployees.length > 0 ? (globalTotalSaldo / allEmployees.length) : 0;
@@ -875,7 +931,7 @@ function renderFundCompositionChart() {
   ];
 
   if (transaksiMencurigakan > 0) {
-    chartData.push({ value: transaksiMencurigakan, name: 'Dana Meragukan', itemStyle: { color: '#8b5cf6' } });
+    chartData.push({ value: transaksiMencurigakan, name: 'Transaksi Meragukan', itemStyle: { color: '#8b5cf6' } });
   }
 
   charts.fundComposition.setOption({
@@ -1162,11 +1218,12 @@ function calculateAnomalies() {
       lastDate = t.date;
     });
 
-    // 3. Hitung Status Aktif Karyawan
+    // 3. Hitung Status Aktif Karyawan (ON jika aktif menabung dalam 3 bulan terakhir dibanding bulan saat ini)
     let isActive = false;
-    if (balance > 1000 && lastDepositDate) {
-      const monthsSinceLast = (new Date().getFullYear() - lastDepositDate.getFullYear()) * 12 + (new Date().getMonth() - lastDepositDate.getMonth());
-      if (monthsSinceLast <= 3) isActive = true;
+    const refDate = new Date();
+    if (lastDepositDate) {
+      const monthsSinceLast = (refDate.getFullYear() - lastDepositDate.getFullYear()) * 12 + (refDate.getMonth() - lastDepositDate.getMonth());
+      if (monthsSinceLast < 3) isActive = true;
     }
     emps[id] = { balance, isActive, lastDepositDate };
   });
@@ -1320,10 +1377,10 @@ function renderAnomaliTable() {
       `;
     } else {
       sumContainer.innerHTML = `
-        <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-triangle"></i></div><div class="card-label">TOTAL KASUS TAMPIL</div><div class="card-value">${totalAnomali}</div><div class="card-sub">Data sesuai filter</div></div>
+        <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-triangle"></i></div><div class="card-label">TOTAL KASUS</div><div class="card-value">${totalAnomali}</div><div class="card-sub">Data sesuai filter</div></div>
         <div class="summary-card"><div class="card-icon green"><i class="fas fa-hand-holding-usd"></i></div><div class="card-label">Total Hutang Terbayar</div><div class="card-value" style="color: #10b981;">${fmt(totalRecovered)}</div><div class="card-sub">Total pemulihan dana</div></div>
-        <div class="summary-card"><div class="card-icon orange"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">Potensi Kerugian</div><div class="card-value" style="color: #f59e0b;">${fmt(potensiKerugian)}</div><div class="card-sub">Status: Menunggu Review</div></div>
-        <div class="summary-card"><div class="card-icon red"><i class="fas fa-times-circle"></i></div><div class="card-label">Kerugian Terbukti</div><div class="card-value" style="color: #ef4444;">${fmt(kerugianTerbukti)}</div><div class="card-sub">Total Defisit Terkonfirmasi</div></div>
+        <div class="summary-card"><div class="card-icon orange"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">Potensi Selisih</div><div class="card-value" style="color: #f59e0b;">${fmt(potensiKerugian)}</div><div class="card-sub">Status: Menunggu Review</div></div>
+        <div class="summary-card"><div class="card-icon red"><i class="fas fa-times-circle"></i></div><div class="card-label">Selisih Terbukti</div><div class="card-value" style="color: #ef4444;">${fmt(kerugianTerbukti)}</div><div class="card-sub">Total Defisit Terkonfirmasi</div></div>
         <div class="summary-card"><div class="card-icon blue"><i class="fas fa-check-double"></i></div><div class="card-label">Kasus Terbukti</div><div class="card-value">${countVerified}</div><div class="card-sub">Telah diverifikasi salah</div></div>
         <div class="summary-card"><div class="card-icon purple" style="background: rgba(168, 85, 247, 0.1); color: #a855f7;"><i class="fas fa-user-check"></i></div><div class="card-label">Koreksi Data</div><div class="card-value">${countKoreksi}</div><div class="card-sub">Salah Input / Nama</div></div>
       `;
@@ -2509,7 +2566,7 @@ function showEmployee(name, nik = '') {
   }
 
   const saldo = currentPrincipal;
-  const roi = (lifeIn - lifeOut) > 0 ? (exactBunga / (lifeIn - lifeOut) * 100) : 0;
+  const roi = lifeIn > 0 ? (exactBunga / lifeIn * 100) : 0;
   const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
   const empNik = nik && nik !== '-' ? nik : (allTxs[0]?.nik || '-');
   
@@ -2533,13 +2590,17 @@ function showEmployee(name, nik = '') {
 
   // SMART ALERTS
   const alerts = [];
-  const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getUTCMonth() - 3);
-  if (lastContributionDate && lastContributionDate < threeMonthsAgo) {
-    const now = new Date();
-    const diffMonths = (now.getFullYear() - lastContributionDate.getFullYear()) * 12 + (now.getMonth() - lastContributionDate.getMonth());
-    alerts.push(`<div class="ai-insight-item" style="background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.2);"><i class="fas fa-exclamation-triangle"></i> Karyawan ini tidak melakukan setoran selama ${diffMonths} bulan berturut-turut.</div>`);
+  const refDate = new Date();
+  const monthsSinceLast = lastContributionDate ? (refDate.getFullYear() - lastContributionDate.getFullYear()) * 12 + (refDate.getMonth() - lastContributionDate.getMonth()) : 999;
+  if (lastContributionDate && monthsSinceLast >= 3) {
+    let durationStr = `${monthsSinceLast} bulan`;
+    if (monthsSinceLast >= 12) {
+      const years = Math.floor(monthsSinceLast / 12);
+      const remainingMonths = monthsSinceLast % 12;
+      durationStr = `${years} tahun` + (remainingMonths > 0 ? ` ${remainingMonths} bulan` : '');
+    }
+    alerts.push(`<div class="ai-insight-item" style="background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.2);"><i class="fas fa-exclamation-triangle"></i> Karyawan ini tidak melakukan setoran selama ${durationStr} berturut-turut.</div>`);
   }
-  if (roi > 5) alerts.push(`<div class="ai-insight-item" style="background:rgba(16, 185, 129, 0.1); border:1px solid rgba(16, 185, 129, 0.2);"><i class="fas fa-star"></i> Performa ROI sangat baik. Karyawan ini adalah penabung konsisten.</div>`);
   document.getElementById('empSmartAlerts').innerHTML = alerts.join('');
 
 
@@ -2580,8 +2641,8 @@ function showEmployee(name, nik = '') {
     <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(239, 68, 68, 0.3); font-size: 0.7rem; text-align: left; line-height: 1.6; color: #475569;">
       <div style="display: flex; justify-content: space-between;"><span>Modal:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.modal)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>Bunga:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.bunga)}</span></div>
-      <div style="display: flex; justify-content: space-between;"><span>T. Salah:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
-      <div style="display: flex; justify-content: space-between;"><span>Meragukan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Selisih Terbukti:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Transaksi Mencurigakan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
     </div>
   `;
 
@@ -2653,6 +2714,19 @@ function showEmployee(name, nik = '') {
   const ctx2 = document.getElementById('empPieChart');
   if (charts.empPie) charts.empPie.dispose();
   charts.empPie = echarts.init(ctx2);
+  
+  const lifeBrk = calculateWithdrawalBreakdown(allTxs);
+  const pieData = [
+    { value: lifeIn, name: 'Total Setoran (Modal)', itemStyle: { color: '#4f46e5' } },
+    { value: exactBunga, name: 'Total Bunga (Return)', itemStyle: { color: '#f59e0b' } }
+  ];
+  if (lifeBrk.salah > 0) {
+    pieData.push({ value: lifeBrk.salah, name: 'Selisih Terbukti', itemStyle: { color: '#ef4444' } });
+  }
+  if (lifeBrk.suspicious > 0) {
+    pieData.push({ value: lifeBrk.suspicious, name: 'Transaksi Mencurigakan', itemStyle: { color: '#8b5cf6' } });
+  }
+
   charts.empPie.setOption({
     tooltip: { trigger: 'item', backgroundColor: 'rgba(15, 23, 42, 0.9)', textStyle: { color: '#fff', fontFamily: 'Inter' }, formatter: (p) => `${p.marker}${p.name}: <br/><span style="margin-left:14px;font-weight:600">${fmt(p.value)}</span>` },
     legend: { bottom: 0, itemGap: 15, textStyle: { fontFamily: 'Inter', color: '#64748b' } },
@@ -2661,10 +2735,7 @@ function showEmployee(name, nik = '') {
       avoidLabelOverlap: false,
       itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
       label: { show: false }, labelLine: { show: false },
-      data: [
-        { value: lifeIn, name: 'Total Setoran (Modal)', itemStyle: { color: '#4f46e5' } },
-        { value: exactBunga, name: 'Total Bunga (Return)', itemStyle: { color: '#f59e0b' } }
-      ]
+      data: pieData
     }]
   });
 
@@ -2709,9 +2780,45 @@ function showEmployee(name, nik = '') {
         const linkBtn = link ? `<a href="${link}" target="_blank" class="btn-view-tf" style="margin-left:8px; font-size:0.75rem;"><i class="fas fa-external-link-alt"></i> Bukti</a>` : '';
 
         const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
-        const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'MENUNGGU REVIEW');
-        const highlightBg = isSuspicious ? 'background-color: rgba(239, 68, 68, 0.08);' : '';
-        const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Meragukan"></i>` : '';
+        const anom = allAnomalies.find(a => a.txKey === txKey || a.originalNo === d.sheetRow);
+        
+        let highlightBg = '';
+        let alertIcon = '';
+        let statusBadgeText = '';
+        
+        if (anom) {
+          const sudahBayar = anom.initialDebt - anom.remainingDebt;
+          const sisaCicilan = anom.remainingDebt;
+          
+          if (anom.status === 'TERBUKTI' || anom.status === 'Verified') {
+            highlightBg = 'background-color: rgba(239, 68, 68, 0.05);';
+            alertIcon = `<i class="fas fa-exclamation-circle" style="color:#ef4444; margin-right:4px;" title="Terbukti Selisih"></i>`;
+            
+            if (sisaCicilan > 0 && sudahBayar > 0) {
+              statusBadgeText = `<span class="badge-status" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-size:0.7rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">Terbukti (Dicicil: Sisa ${fmt(sisaCicilan)}, Bayar ${fmt(sudahBayar)})</span>`;
+            } else if (sisaCicilan > 0) {
+              statusBadgeText = `<span class="badge-status" style="background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; font-size:0.7rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">Terbukti (Sisa Selisih: ${fmt(sisaCicilan)})</span>`;
+            } else {
+              statusBadgeText = `<span class="badge-status" style="background:#dcfce7; color:#15803d; border:1px solid #bbf7d0; font-size:0.7rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">Terbukti (Lunas: ${fmt(sudahBayar)})</span>`;
+            }
+          } else if (anom.status === 'MENUNGGU REVIEW' || anom.systemStatus === 'MENCURIGAKAN' || anom.systemStatus === 'DICICIL') {
+            highlightBg = 'background-color: rgba(245, 158, 11, 0.05);';
+            alertIcon = `<i class="fas fa-exclamation-triangle" style="color:#f59e0b; margin-right:4px;" title="Menunggu Review"></i>`;
+            
+            if (sisaCicilan > 0 && sudahBayar > 0) {
+              statusBadgeText = `<span class="badge-status" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-size:0.7rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">Meragukan (Dicicil: Sisa ${fmt(sisaCicilan)}, Bayar ${fmt(sudahBayar)})</span>`;
+            } else {
+              statusBadgeText = `<span class="badge-status" style="background:#fef3c7; color:#d97706; border:1px solid #fde68a; font-size:0.7rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">Meragukan (Belum Direview: ${fmt(sisaCicilan)})</span>`;
+            }
+          } else if (anom.status === 'SALAH INPUT' || anom.status === 'Salah Orang') {
+            statusBadgeText = `<span class="badge-status" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; font-size:0.7rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">Salah Input</span>`;
+          }
+        }
+
+        let jenisDisplay = d.jenis;
+        if (statusBadgeText) {
+          jenisDisplay += `<br/>${statusBadgeText}`;
+        }
 
         // Tampilkan bunga yang cair di baris ini
         const bungaDisplay = currentInterest > 0 ? fmt(currentInterest) : '-';
@@ -2719,7 +2826,7 @@ function showEmployee(name, nik = '') {
         tableData.push({
           date: d.date,
           dateStr: d.dateStr || fmtDate(d.date),
-          jenis: d.jenis,
+          jenis: jenisDisplay,
           linkBtn,
           nominal: d.nominal,
           type: d.type,

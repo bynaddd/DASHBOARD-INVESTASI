@@ -54,7 +54,7 @@
         
         <div class="login-input-group">
           <label>Email Address</label>
-          <input type="email" id="loginEmail" class="login-input" placeholder="admin@moneybox.com">
+          <input type="email" id="loginEmail" class="login-input" placeholder="adminmoneybox@asuka.com">
         </div>
         
         <div class="login-input-group">
@@ -63,6 +63,24 @@
         </div>
         
         <button id="btnLoginAdmin" class="btn btn-primary btn-login-submit">Masuk Sekarang</button>
+      </div>
+
+      <div id="guestLoginForm" class="login-form-area">
+        <button id="btnBackToChoiceFromGuest" class="back-to-choice"><i class="fas fa-arrow-left"></i> Kembali</button>
+        <h3 class="login-title" style="font-size: 1.8rem; margin-bottom: 8px;">Login Tamu</h3>
+        <p class="login-desc" style="margin-bottom: 32px;">Masukkan kredensial Anda untuk akses tamu</p>
+        
+        <div class="login-input-group">
+          <label>Email Address</label>
+          <input type="email" id="guestEmail" class="login-input" placeholder="moneybox@asuka.com">
+        </div>
+        
+        <div class="login-input-group">
+          <label>Password</label>
+          <input type="password" id="guestPassword" class="login-input" placeholder="••••••••">
+        </div>
+        
+        <button id="btnLoginGuest" class="btn btn-primary btn-login-submit">Masuk Sekarang</button>
       </div>
     </div>
   </div>
@@ -345,8 +363,8 @@
       
       <div style="margin-bottom: 24px; font-size: 0.8rem; color: #64748b; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid #e2e8f0; line-height: 1.5;">
         <strong><i class="fas fa-info-circle" style="color: var(--primary);"></i> Keterangan Status:</strong> &nbsp;
-        <span style="color: #10b981; font-weight: 700; margin-left: 8px;">AKTIF (ON)</span>: Karyawan saat ini masih memiliki saldo investasi (> Rp 0). &nbsp; | &nbsp;
-        <span style="color: #94a3b8; font-weight: 700; margin-left: 8px;">OFF</span>: Karyawan sudah tidak memiliki saldo (saldo Rp 0).
+        <span style="color: #10b981; font-weight: 700; margin-left: 8px;">AKTIF (ON)</span>: Karyawan aktif menabung dalam 3 bulan terakhir. &nbsp; | &nbsp;
+        <span style="color: #94a3b8; font-weight: 700; margin-left: 8px;">OFF</span>: Karyawan tidak aktif menabung dalam 3 bulan terakhir atau sudah berhenti.
       </div>
     </div>
     
