@@ -231,28 +231,28 @@ function calculateWithdrawalBreakdown(filteredData) {
 
   const empState = {};
   const monthlyRate = 0.03 / 12;
-  const anomalyMap = {};
-  allAnomalies.forEach(a => { anomalyMap[a.txKey] = a.status; });
 
   // Kita harus memproses seluruh data secara kronologis untuk mendapatkan saldo modal vs bunga yang akurat
 
   allData.forEach(t => {
     const id = getEmpId(t);
-    if (!empState[id]) empState[id] = { principal: 0, interest: 0, lastDate: null };
+    if (!empState[id]) empState[id] = { principal: 0, interest: 0, lastInterestMonth: null };
     const s = empState[id];
 
-    // Hitung bunga yang terkumpul (hanya jika ada saldo modal)
-    if (s.lastDate && t.date > s.lastDate && s.principal > 0) {
-      const diffMonths = (t.date.getFullYear() - s.lastDate.getFullYear()) * 12 + (t.date.getMonth() - s.lastDate.getMonth());
-      if (diffMonths > 0) s.interest += s.principal * monthlyRate * diffMonths;
-    }
-
     if (t.type === 'Tabungan') {
+      const txMonth = t.date ? (t.date.getFullYear() + '-' + t.date.getMonth()) : null;
+      if (txMonth && s.lastInterestMonth !== txMonth) {
+        if (s.principal > 0) {
+          s.interest += s.principal * monthlyRate;
+        }
+        s.lastInterestMonth = txMonth;
+      }
       s.principal += t.nominal;
     } else {
       // Penarikan
-      const txKey = `anomali_${id}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
-      const status = anomalyMap[txKey];
+      const anom = allAnomalies.find(a => a.originalNo === t.sheetRow);
+      const status = anom ? anom.status : null;
+      const sysStatus = anom ? anom.systemStatus : null;
       const isFiltered = filteredRows.has(t.sheetRow);
 
       const nominal = t.nominal;
@@ -262,33 +262,34 @@ function calculateWithdrawalBreakdown(filteredData) {
       let takenSalah = 0;
       let takenSuspicious = 0;
 
-      // 1. Logika Waterfall: Ambil dari Bunga lalu Modal
+      // 1. Logika Waterfall: Ambil dari Modal lalu Bunga
       const totalAvailable = s.interest + s.principal;
       const amountCovered = Math.max(0, Math.min(remaining, totalAvailable));
       
       if (amountCovered > 0) {
-        const fromBunga = Math.min(amountCovered, s.interest);
-        takenBunga = fromBunga;
-        s.interest -= fromBunga;
-        
-        const fromModal = amountCovered - fromBunga;
+        const fromModal = Math.min(amountCovered, s.principal);
         takenModal = fromModal;
         s.principal -= fromModal;
+        
+        const fromBunga = amountCovered - fromModal;
+        takenBunga = fromBunga;
+        s.interest -= fromBunga;
         
         remaining -= amountCovered;
       }
       
-      // 2. Sisa nominal (Defisit) dikategorikan berdasarkan status anomali
+      // 2. Sisa nominal (Defisit) dikategorikan
       if (remaining > 0) {
-        if (status === 'Verified') {
+        if (status === 'TERBUKTI' || status === 'Verified') {
           // Kerugian Terbukti: Defisit dari transaksi yang sudah diverifikasi
-          takenSalah = remaining;
-        } else if (status === 'MENUNGGU REVIEW') {
+          takenSalah += remaining;
+        } else if (status === 'MENUNGGU REVIEW' || sysStatus === 'MENCURIGAKAN' || sysStatus === 'DICICIL') {
           // Potensi Kerugian: Defisit dari transaksi yang masih dalam investigasi
-          takenSuspicious = remaining;
+          takenSuspicious += remaining;
         } else {
-          // Normal atau Salah Orang (Koreksi): Defisit dianggap sebagai pengurang modal
-          takenModal += remaining;
+          // Jika defisit kecil (< 10rb) atau status lain, tetap catat sebagai selisih
+          // agar tidak menggelembungkan Modal melebihi nilai setoran yang sebenarnya
+          takenSalah += remaining;
         }
         s.principal -= remaining;
       }
@@ -300,7 +301,6 @@ function calculateWithdrawalBreakdown(filteredData) {
         breakdown.suspicious += takenSuspicious;
       }
     }
-    s.lastDate = t.date;
   });
 
   return breakdown;
@@ -663,20 +663,25 @@ function renderSummary() {
      let cumIn = 0, cumOut = 0;
      const emps = {};
      const sorted = [...cumulativeData].sort((a,b)=>a.date-b.date);
+     const monthlyRate = 0.03 / 12;
      sorted.forEach(d => {
-       if (d.type === 'Tabungan') cumIn += d.nominal;
-       else cumOut += d.nominal;
        
        const id = getEmpId(d);
-       if (!emps[id]) emps[id] = { balance: 0, lastDate: null };
-       let interest = 0;
-       if (emps[id].lastDate && d.date > emps[id].lastDate && emps[id].balance > 0) {
-         const diffMonths = (d.date.getFullYear() - emps[id].lastDate.getFullYear()) * 12 + (d.date.getMonth() - emps[id].lastDate.getMonth());
-         if (diffMonths > 0) interest = emps[id].balance * 0.0025 * diffMonths;
+       if (!emps[id]) emps[id] = { balance: 0, lastInterestMonth: null };
+       
+       if (d.type === 'Tabungan') {
+         cumIn += d.nominal;
+         const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
+         let interest = 0;
+         if (txMonth && emps[id].lastInterestMonth !== txMonth) {
+           if (emps[id].balance > 0) interest = emps[id].balance * monthlyRate;
+           emps[id].lastInterestMonth = txMonth;
+         }
+         emps[id].balance += interest + d.nominal;
+       } else { 
+         cumOut += d.nominal;
+         emps[id].balance -= d.nominal; 
        }
-       if (d.type === 'Tabungan') emps[id].balance += interest + d.nominal;
-       else { emps[id].balance -= d.nominal; interest = 0; }
-       emps[id].lastDate = d.date;
      });
      total = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
      totalPrincipal = cumIn - cumOut;
@@ -797,31 +802,51 @@ function renderHealthAnalytics() {
 
 // ===== TREND CHART =====
 function renderTrendChart() {
-  const monthly = {};
-  globalFilteredData.forEach(d => { if (!d.date) return; const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0'); if (!monthly[k]) monthly[k] = { in: 0, out: 0 }; d.type === 'Tabungan' ? monthly[k].in += d.nominal : monthly[k].out += d.nominal; });
-  const keys = Object.keys(monthly).sort(); 
-  let acc = 0; 
-  let principalAcc = 0;
-  const labels = [], dataAcc = [], dataPrincipal = [];
   const monthlyRate = 0.03 / 12;
-  let lastDate = null;
+  const sorted = [...globalFilteredData].filter(d => d.date).sort((a,b) => a.date - b.date);
+  
+  const snapshotEmps = {};
+  const monthlyGroups = {};
+  sorted.forEach(d => {
+    const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0');
+    if(!monthlyGroups[k]) monthlyGroups[k] = [];
+    monthlyGroups[k].push(d);
+  });
+
+  const keys = Object.keys(monthlyGroups).sort();
+  const labels = [], dataAcc = [], dataPrincipal = [];
 
   keys.forEach(k => {
     const [y, m] = k.split('-');
-    const currentDate = new Date(parseInt(y), parseInt(m), 1);
     
-    if (lastDate && currentDate > lastDate && acc > 0) {
-      const diff = (currentDate.getFullYear() - lastDate.getFullYear()) * 12 + (currentDate.getMonth() - lastDate.getMonth());
-      if (diff > 0) acc += acc * monthlyRate * diff;
-    }
-    
-    acc += (monthly[k].in - monthly[k].out);
-    principalAcc += (monthly[k].in - monthly[k].out);
+    monthlyGroups[k].forEach(d => {
+      const id = getEmpId(d);
+      if (!snapshotEmps[id]) snapshotEmps[id] = { balance: 0, principal: 0, lastInterestMonth: null };
+      
+      if (d.type === 'Tabungan') {
+        const txMonth = d.date.getFullYear() + '-' + d.date.getMonth();
+        let interest = 0;
+        if (snapshotEmps[id].lastInterestMonth !== txMonth) {
+          if (snapshotEmps[id].principal > 0) interest = snapshotEmps[id].principal * monthlyRate;
+          snapshotEmps[id].lastInterestMonth = txMonth;
+        }
+        snapshotEmps[id].principal += d.nominal;
+        snapshotEmps[id].balance += interest + d.nominal;
+      } else {
+        snapshotEmps[id].principal -= d.nominal;
+        snapshotEmps[id].balance -= d.nominal;
+      }
+    });
+
+    let monthBal = 0, monthPrin = 0;
+    Object.values(snapshotEmps).forEach(e => {
+      monthBal += e.balance;
+      monthPrin += e.principal;
+    });
     
     labels.push(monthNames[+m] + ' ' + y);
-    dataAcc.push(acc); 
-    dataPrincipal.push(principalAcc);
-    lastDate = currentDate;
+    dataAcc.push(monthBal); 
+    dataPrincipal.push(monthPrin);
   });
 
   const ctx = document.getElementById('trendChart');
@@ -1086,17 +1111,21 @@ function calculateAnomalies() {
 
     let balance = 0;
     let pendingInterest = 0;
-    let lastDate = null;
     let lastDepositDate = null;
+    let lastInterestMonth = null;
     let empActiveAnomalies = []; // Hanya melacak kasus yang belum LUNAS untuk alokasi FIFO
+    let lifeIn = 0;
+    let lifeOut = 0;
 
     txs.sort((a, b) => a.date - b.date);
 
     txs.forEach(t => {
-      // 1. Hitung Bunga sebelum transaksi
-      if (lastDate && t.date > lastDate && balance > 0) {
-        const diffMonths = (t.date.getFullYear() - lastDate.getFullYear()) * 12 + (t.date.getMonth() - lastDate.getMonth());
-        if (diffMonths > 0) pendingInterest = balance * monthlyRate * diffMonths;
+      const txMonth = t.date ? (t.date.getFullYear() + '-' + t.date.getMonth()) : null;
+      if (t.type === 'Tabungan') {
+        if (txMonth && lastInterestMonth !== txMonth) {
+          if (balance > 0) pendingInterest = balance * monthlyRate;
+          lastInterestMonth = txMonth;
+        }
       }
 
       const balanceBefore = balance;
@@ -1106,6 +1135,7 @@ function calculateAnomalies() {
         balance += t.nominal;
         pendingInterest = 0;
         lastDepositDate = t.date;
+        lifeIn += t.nominal;
 
         // ALOKASI FIFO: Gunakan setoran untuk menutup hutang kasus lama
         let payment = t.nominal;
@@ -1129,6 +1159,7 @@ function calculateAnomalies() {
         // Penarikan
         balance -= t.nominal;
         pendingInterest = 0;
+        lifeOut += t.nominal;
       }
 
       // 2. Deteksi Kasus Baru jika Saldo Negatif ATAU sudah pernah direview
@@ -1215,17 +1246,16 @@ function calculateAnomalies() {
         allAnomalies.push(anomalyData);
         if (isDeficit) empActiveAnomalies.push(anomalyData);
       }
-      lastDate = t.date;
     });
 
-    // 3. Hitung Status Aktif Karyawan (ON jika aktif menabung dalam 3 bulan terakhir dibanding bulan saat ini)
     let isActive = false;
-    const refDate = new Date();
     if (lastDepositDate) {
-      const monthsSinceLast = (refDate.getFullYear() - lastDepositDate.getFullYear()) * 12 + (refDate.getMonth() - lastDepositDate.getMonth());
-      if (monthsSinceLast < 3) isActive = true;
+      const refDate = typeof globalReferenceDate !== 'undefined' && globalReferenceDate ? globalReferenceDate : new Date();
+      const diffMonths = (refDate.getFullYear() - lastDepositDate.getFullYear()) * 12 + (refDate.getMonth() - lastDepositDate.getMonth());
+      isActive = diffMonths < 3;
     }
-    emps[id] = { balance, isActive, lastDepositDate };
+    const sisaSetoran = lifeIn - lifeOut;
+    emps[id] = { balance, isActive, lastDepositDate, sisaSetoran };
   });
 
   globalTotalSaldo = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
@@ -2557,17 +2587,17 @@ function showEmployee(name, nik = '') {
   if (allTxs.length > 0) {
     const sortedTxs = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
     const monthlyRate = 0.03 / 12;
-    let lastProcessedDate = sortedTxs[0]?.date;
+    let lastInterestMonth = null;
     
     sortedTxs.forEach(tx => {
       let pending = 0;
-      if (lastProcessedDate && tx.date > lastProcessedDate && currentPrincipal > 0) {
-        const diffMonths = (tx.date.getFullYear() - lastProcessedDate.getFullYear()) * 12 + (tx.date.getMonth() - lastProcessedDate.getMonth());
-        if (diffMonths > 0) {
-          pending = currentPrincipal * monthlyRate * diffMonths;
-        }
-      }
+      const txMonth = tx.date ? (tx.date.getFullYear() + '-' + tx.date.getMonth()) : null;
+
       if (tx.type === 'Tabungan') {
+        if (txMonth && lastInterestMonth !== txMonth) {
+          if (currentPrincipal > 0) pending = currentPrincipal * monthlyRate;
+          lastInterestMonth = txMonth;
+        }
         currentPrincipal += pending;
         exactBunga += pending;
         currentPrincipal += tx.nominal;
@@ -2579,7 +2609,6 @@ function showEmployee(name, nik = '') {
       labels.push(monthNames[tx.date.getMonth()] + ' ' + tx.date.getFullYear());
       balanceData.push(currentPrincipal);
       principalData.push(accPrincipal);
-      lastProcessedDate = tx.date;
     });
   }
 
@@ -2625,25 +2654,22 @@ function showEmployee(name, nik = '') {
   let saldoAwal = 0;
   if (startDate) {
     let tempBal = 0;
-    const sortedAll = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
-    let tempDate = sortedAll.length > 0 ? new Date(sortedAll[0].date) : null;
-    const dailyRate = INTEREST_RATE / 365;
-
-    if (tempDate) {
-      const txsByDay = {};
-      sortedAll.forEach(tx => {
-        const dStr = tx.date.getFullYear() + '-' + tx.date.getMonth() + '-' + tx.date.getDate();
-        if (!txsByDay[dStr]) txsByDay[dStr] = 0;
-        txsByDay[dStr] += (tx.type === 'Tabungan' ? tx.nominal : -tx.nominal);
-      });
-
-      while (tempDate < startDate) {
-        const dStr = tempDate.getFullYear() + '-' + tempDate.getMonth() + '-' + tempDate.getDate();
-        if (txsByDay[dStr]) tempBal += txsByDay[dStr];
-        if (tempBal > 0) tempBal += tempBal * dailyRate;
-        tempDate.setDate(tempDate.getDate() + 1);
+    let tempLastMonth = null;
+    const sortedAll = [...allTxs].filter(d => d.date && d.date < startDate).sort((a, b) => a.date - b.date);
+    
+    sortedAll.forEach(tx => {
+      const txMonth = tx.date.getFullYear() + '-' + tx.date.getMonth();
+      if (tx.type === 'Tabungan') {
+        let interest = 0;
+        if (tempLastMonth !== txMonth) {
+          if (tempBal > 0) interest = tempBal * 0.0025;
+          tempLastMonth = txMonth;
+        }
+        tempBal += interest + tx.nominal;
+      } else {
+        tempBal -= tx.nominal;
       }
-    }
+    });
     saldoAwal = Math.round(tempBal);
   }
 
@@ -2659,10 +2685,13 @@ function showEmployee(name, nik = '') {
     <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed rgba(239, 68, 68, 0.3); font-size: 0.7rem; text-align: left; line-height: 1.6; color: #475569;">
       <div style="display: flex; justify-content: space-between;"><span>Modal:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.modal)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>Bunga:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.bunga)}</span></div>
-      <div style="display: flex; justify-content: space-between;"><span>Selisih Terbukti:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>Selisih (Defisit):</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.salah)}</span></div>
       <div style="display: flex; justify-content: space-between;"><span>Transaksi Meragukan:</span> <span style="font-weight:600; color:#ef4444;">${fmt(empBrk.suspicious)}</span></div>
     </div>
   `;
+
+  // Hitung pecahan penarikan dari seluruh riwayat (kumulatif)
+  const lifeBrk = calculateWithdrawalBreakdown(allTxs);
 
   const cards = [];
   const uniqueMonths = new Set(allTxs.filter(tx => tx.date).map(tx => tx.date.getFullYear() + '-' + tx.date.getMonth()));
@@ -2673,7 +2702,7 @@ function showEmployee(name, nik = '') {
   cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Akhir', value: fmt(Math.round(saldo)), sub: 'Kumulatif saat ini' });
   cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
   cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
-  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'ROI (Return)', value: roi.toFixed(2) + '%', sub: `Est. Bunga: ${fmt(Math.round(exactBunga))}` });
+  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'Bunga', value: fmt(Math.round(exactBunga)), sub: `ROI: ${roi.toFixed(2)}%` });
 
   document.getElementById('empCards').innerHTML = cards.map(c => `
     <div class="summary-card">
@@ -2733,13 +2762,12 @@ function showEmployee(name, nik = '') {
   if (charts.empPie) charts.empPie.dispose();
   charts.empPie = echarts.init(ctx2);
   
-  const lifeBrk = calculateWithdrawalBreakdown(allTxs);
   const pieData = [
     { value: lifeIn, name: 'Total Setoran (Modal)', itemStyle: { color: '#4f46e5' } },
     { value: exactBunga, name: 'Total Bunga (Return)', itemStyle: { color: '#f59e0b' } }
   ];
   if (lifeBrk.salah > 0) {
-    pieData.push({ value: lifeBrk.salah, name: 'Selisih Terbukti', itemStyle: { color: '#ef4444' } });
+    pieData.push({ value: lifeBrk.salah, name: 'Selisih (Defisit)', itemStyle: { color: '#ef4444' } });
   }
   if (lifeBrk.suspicious > 0) {
     pieData.push({ value: lifeBrk.suspicious, name: 'Transaksi Meragukan', itemStyle: { color: '#8b5cf6' } });
@@ -2767,26 +2795,22 @@ function showEmployee(name, nik = '') {
   const sortedTable = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
 
   if (sortedTable.length > 0) {
+    let tableLastInterestMonth = null;
     sortedTable.forEach(d => {
-      // 1. Hitung Bunga Tertunda (Hanya Cair saat Tabungan)
       let currentInterest = 0;
-      if (lastTxDateForTable && d.date > lastTxDateForTable && tableRunBal > 0) {
-        const diffMonths = (d.date.getFullYear() - lastTxDateForTable.getFullYear()) * 12 + (d.date.getMonth() - lastTxDateForTable.getMonth());
-        if (diffMonths > 0) {
-          currentInterest = tableRunBal * 0.0025 * diffMonths;
-        }
-      }
+      const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
 
       if (d.type === 'Tabungan') {
-        tableRunBal += currentInterest; // Tambah bunga ke saldo
+        if (txMonth && tableLastInterestMonth !== txMonth) {
+          if (tableRunBal > 0) currentInterest = tableRunBal * 0.0025;
+          tableLastInterestMonth = txMonth;
+        }
+        tableRunBal += currentInterest;
         tableRunBal += d.nominal;
       } else {
-        // Penarikan: Tidak tambah bunga
         tableRunBal -= d.nominal;
         currentInterest = 0;
       }
-
-      lastTxDateForTable = d.date;
 
       let pass = true;
       if (startDate && d.date) pass = pass && d.date >= startDate;
@@ -2919,7 +2943,7 @@ function showEmployee(name, nik = '') {
 
     // Re-calculate for recap table to get cumulative balance correctly
     let recapRunBal = 0;
-    let recapLastDate = null;
+    let recapLastInterestMonth = null;
     
     // Sort all transactions of this employee chronologically to get balance history
     const allChronological = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
@@ -2927,21 +2951,19 @@ function showEmployee(name, nik = '') {
     allChronological.forEach(d => {
       const year = d.date.getFullYear();
       const monthIdx = d.date.getMonth();
+      const txMonth = year + '-' + monthIdx;
       
       let interest = 0;
-      if (recapLastDate && d.date > recapLastDate && recapRunBal > 0) {
-        const diffMonths = (d.date.getFullYear() - recapLastDate.getFullYear()) * 12 + (d.date.getMonth() - recapLastDate.getMonth());
-        if (diffMonths > 0) interest = recapRunBal * 0.0025 * diffMonths;
-      }
-
       if (d.type === 'Tabungan') {
+        if (recapLastInterestMonth !== txMonth) {
+          if (recapRunBal > 0) interest = recapRunBal * 0.0025;
+          recapLastInterestMonth = txMonth;
+        }
         recapRunBal += interest + d.nominal;
       } else {
         recapRunBal -= d.nominal;
         interest = 0;
       }
-      
-      recapLastDate = d.date;
 
       // Only add to recap totals if within the selected year AND matches filterType
       if (year === filterYear) {
@@ -3134,18 +3156,23 @@ function renderAnalyticsContent() {
 
   const cumulativeData = allData.filter(d => d.date && d.date <= filterEndDate);
   const emps = {};
+  const monthlyRate = 0.03 / 12;
   const sorted = [...cumulativeData].sort((a,b)=>a.date-b.date);
   sorted.forEach(d => {
     const id = typeof getEmpId === 'function' ? getEmpId(d) : (d.nik || d.name);
-    if (!emps[id]) emps[id] = { balance: 0, lastDate: null };
-    let interest = 0;
-    if (emps[id].lastDate && d.date > emps[id].lastDate && emps[id].balance > 0) {
-      const diffMonths = (d.date.getFullYear() - emps[id].lastDate.getFullYear()) * 12 + (d.date.getMonth() - emps[id].lastDate.getMonth());
-      if (diffMonths > 0) interest = emps[id].balance * 0.0025 * diffMonths;
+    if (!emps[id]) emps[id] = { balance: 0, lastInterestMonth: null };
+    
+    if (d.type === 'Tabungan') {
+      const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
+      let interest = 0;
+      if (txMonth && emps[id].lastInterestMonth !== txMonth) {
+        if (emps[id].balance > 0) interest = emps[id].balance * monthlyRate;
+        emps[id].lastInterestMonth = txMonth;
+      }
+      emps[id].balance += interest + d.nominal;
+    } else {
+      emps[id].balance -= d.nominal;
     }
-    if (d.type === 'Tabungan') emps[id].balance += interest + d.nominal;
-    else { emps[id].balance -= d.nominal; interest = 0; }
-    emps[id].lastDate = d.date;
   });
   const totalSaldoWithInterest = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
 
@@ -4244,4 +4271,3 @@ document.querySelectorAll('.sys-status-chk').forEach(chk => {
     renderAnomaliTable();
   });
 });
-
