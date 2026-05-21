@@ -2460,6 +2460,33 @@ function initSearch() {
     renderList(empList);
   });
 
+  const btnExportAll = document.getElementById('btnExportAllEmployeesBalance');
+  if (btnExportAll) {
+    btnExportAll.addEventListener('click', () => {
+      if (allEmployees.length === 0) {
+        toast('Tidak ada data karyawan', 'error');
+        return;
+      }
+      const exportData = allEmployees.map((e, i) => {
+        const id = getEmpId(e);
+        const status = allEmployeesStatus[id] || { balance: 0, isActive: false, lastDepositDate: null };
+        return {
+          No: i + 1,
+          Nama: e.name,
+          NIK: e.nik || '-',
+          'Total Saldo Akhir': status.balance,
+          'Status Aktif': status.isActive ? 'Aktif' : 'Tidak Aktif',
+          'Transaksi Terakhir': status.lastDepositDate ? fmtDate(status.lastDepositDate) : '-'
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Daftar Saldo");
+      XLSX.writeFile(wb, `Data_Saldo_Semua_Karyawan_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast('Data saldo semua karyawan berhasil didownload', 'success');
+    });
+  }
+
   // NEW: Employee Filter Listeners
   const modeSel = document.getElementById('empFilterMode');
   const yearSel = document.getElementById('empFilterYear');
