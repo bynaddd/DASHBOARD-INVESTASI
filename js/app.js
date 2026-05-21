@@ -242,8 +242,9 @@ function calculateWithdrawalBreakdown(filteredData) {
     if (t.type === 'Tabungan') {
       const txMonth = t.date ? (t.date.getFullYear() + '-' + t.date.getMonth()) : null;
       if (txMonth && s.lastInterestMonth !== txMonth) {
-        if (s.principal > 0) {
-          s.interest += s.principal * monthlyRate;
+        const currentBalance = s.principal + s.interest;
+        if (currentBalance > 0) {
+          s.interest += currentBalance * monthlyRate;
         }
         s.lastInterestMonth = txMonth;
       }
@@ -267,7 +268,7 @@ function calculateWithdrawalBreakdown(filteredData) {
       const amountCovered = Math.max(0, Math.min(remaining, totalAvailable));
       
       if (amountCovered > 0) {
-        const fromModal = Math.min(amountCovered, s.principal);
+        const fromModal = Math.min(amountCovered, Math.max(0, s.principal));
         takenModal = fromModal;
         s.principal -= fromModal;
         
@@ -828,12 +829,21 @@ function renderTrendChart() {
         let interest = 0;
         if (snapshotEmps[id].lastInterestMonth !== txMonth) {
           if (snapshotEmps[id].principal > 0) interest = snapshotEmps[id].principal * monthlyRate;
+          const currentBal = snapshotEmps[id].balance;
+          if (currentBal > 0) interest = currentBal * monthlyRate;
           snapshotEmps[id].lastInterestMonth = txMonth;
         }
         snapshotEmps[id].principal += d.nominal;
         snapshotEmps[id].balance += interest + d.nominal;
       } else {
         snapshotEmps[id].principal -= d.nominal;
+        const amountCovered = Math.max(0, Math.min(d.nominal, snapshotEmps[id].balance));
+        if (amountCovered > 0) {
+          const fromModal = Math.min(amountCovered, Math.max(0, snapshotEmps[id].principal));
+          snapshotEmps[id].principal -= fromModal;
+        } else {
+          snapshotEmps[id].principal -= d.nominal;
+        }
         snapshotEmps[id].balance -= d.nominal;
       }
     });
@@ -871,13 +881,13 @@ function renderTrendChart() {
     ],
     series: [
       {
-        name: 'Saldo Aktif',
+        name: 'Total Saldo',
         data: dataAcc, type: 'line', smooth: 0.4, symbol: 'circle', symbolSize: 6,
         itemStyle: { color: '#6366f1' }, lineStyle: { width: 3 },
         areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(99, 102, 241, 0.2)' }, { offset: 1, color: 'rgba(99, 102, 241, 0.0)' }]) }
       },
       {
-        name: 'Modal (Principal)',
+        name: 'Total Setoran',
         data: dataPrincipal, type: 'line', smooth: 0.4, symbol: 'none',
         itemStyle: { color: '#10b981' }, lineStyle: { width: 2, type: 'dashed' }
       }
@@ -2610,7 +2620,7 @@ function showEmployee(name, nik = '') {
   });
 
   // Calculate Balance & Bunga (Waterfall)
-  let currentPrincipal = 0, exactBunga = 0, accPrincipal = 0, labels = [], balanceData = [], principalData = [];
+  let currentBalance = 0, exactBunga = 0, accPrincipal = 0, labels = [], balanceData = [], principalData = [];
   if (allTxs.length > 0) {
     const sortedTxs = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
     const monthlyRate = 0.03 / 12;
@@ -2622,24 +2632,31 @@ function showEmployee(name, nik = '') {
 
       if (tx.type === 'Tabungan') {
         if (txMonth && lastInterestMonth !== txMonth) {
-          if (currentPrincipal > 0) pending = currentPrincipal * monthlyRate;
+          if (currentBalance > 0) pending = currentBalance * monthlyRate;
           lastInterestMonth = txMonth;
         }
-        currentPrincipal += pending;
+        currentBalance += pending;
         exactBunga += pending;
-        currentPrincipal += tx.nominal;
+
+        currentBalance += tx.nominal;
         accPrincipal += tx.nominal;
       } else {
-        currentPrincipal -= tx.nominal;
-        accPrincipal -= tx.nominal;
+        const amountCovered = Math.max(0, Math.min(tx.nominal, currentBalance));
+        if (amountCovered > 0) {
+          const fromModal = Math.min(amountCovered, Math.max(0, accPrincipal));
+          accPrincipal -= fromModal;
+        } else {
+          accPrincipal -= tx.nominal;
+        }
+        currentBalance -= tx.nominal;
       }
       labels.push(monthNames[tx.date.getMonth()] + ' ' + tx.date.getFullYear());
-      balanceData.push(currentPrincipal);
+      balanceData.push(currentBalance);
       principalData.push(accPrincipal);
     });
   }
 
-  const saldo = currentPrincipal;
+  const saldo = currentBalance;
   const roi = lifeIn > 0 ? (exactBunga / lifeIn * 100) : 0;
   const initials = name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
   const empNik = nik && nik !== '-' ? nik : (allTxs[0]?.nik || '-');
@@ -2729,6 +2746,23 @@ function showEmployee(name, nik = '') {
   cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Akhir', value: fmt(Math.round(saldo)), sub: 'Kumulatif saat ini' });
   cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
   cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
+
+  let totalPaidDebt = 0;
+  const empSheetRows = new Set(allTxs.map(t => t.sheetRow));
+  allAnomalies.forEach(a => {
+    if (empSheetRows.has(a.originalNo)) {
+      totalPaidDebt += (a.initialDebt - a.remainingDebt);
+    }
+  });
+  totalPaidDebt = Math.round(totalPaidDebt);
+
+  const sisaSetoran = lifeIn - lifeBrk.modal - totalPaidDebt;
+  let sisaSetoranSub = 'Setoran murni tersisa';
+  if (totalPaidDebt > 0) {
+    sisaSetoranSub += `<div style="margin-top:4px;">Untuk bayar selisih: <span style="font-weight:600; color:#ef4444;">${fmt(totalPaidDebt)}</span></div>`;
+  }
+  cards.push({ icon: 'fas fa-coins', cls: 'indigo', label: 'Sisa Setoran Saat Ini', value: fmt(Math.max(0, Math.round(sisaSetoran))), sub: sisaSetoranSub });
+
   cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'Bunga', value: fmt(Math.round(exactBunga)), sub: `ROI: ${roi.toFixed(2)}%` });
 
   document.getElementById('empCards').innerHTML = cards.map(c => `
@@ -2769,14 +2803,14 @@ function showEmployee(name, nik = '') {
     ],
     series: [
       {
-        name: 'Saldo Aktif',
+        name: 'Total Saldo',
         data: balanceData.map((v, i) => ({ value: v, itemStyle: { color: pointColors[i], borderColor: pointBorderColors[i], borderWidth: 2 } })),
         type: 'line', smooth: 0.3, symbolSize: 6,
         lineStyle: { color: '#4f46e5', width: 2 },
         areaStyle: { color: 'rgba(79,70,229,0.1)' }
       },
       {
-        name: 'Modal (Principal)',
+        name: 'Total Setoran',
         data: principalData,
         type: 'line', smooth: 0.3, symbol: 'none',
         lineStyle: { color: '#10b981', width: 2, type: 'dashed' }

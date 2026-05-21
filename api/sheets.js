@@ -2,6 +2,8 @@ const { google } = require('googleapis');
 const path = require('path');
 const fs = require('fs');
 
+let cachedSheetsClient = null;
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -110,15 +112,19 @@ module.exports = async (req, res) => {
        });
     }
 
-    // Handle GET for Reviews or Sheets
-    if (req.method === 'GET') {
-      const { type } = req.query;
-      
+    // Cache instance agar Vercel tidak re-authenticate tiap kali request
+    if (!cachedSheetsClient) {
       const auth = new google.auth.GoogleAuth({
         credentials: { client_email: email, private_key: cleanKey },
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
-      const sheets = google.sheets({ version: 'v4', auth });
+      cachedSheetsClient = google.sheets({ version: 'v4', auth });
+    }
+    const sheets = cachedSheetsClient;
+
+    // Handle GET for Reviews or Sheets
+    if (req.method === 'GET') {
+      const { type } = req.query;
 
       if (type === 'review') {
         try {
@@ -145,13 +151,7 @@ module.exports = async (req, res) => {
 
     // Handle Login, Review, and Update (POST)
     if (req.method === 'POST') {
-      const { type, email: inputEmail, pass: inputPass, reviewData, updateData, data: uploadData } = req.body || {};
-      
-      const auth = new google.auth.GoogleAuth({
-        credentials: { client_email: email, private_key: cleanKey },
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
-      const sheets = google.sheets({ version: 'v4', auth });
+      const { type, email: inputEmail, pass: inputPass, reviewData, updateData, data: uploadData, anomalies } = req.body || {};
 
       // 1. Admin Login
       if (type === 'login') {
@@ -365,15 +365,11 @@ module.exports = async (req, res) => {
         });
         return res.status(200).json({ success: true });
       }
+
+      return res.status(400).json({ success: false, error: 'Invalid POST payload' });
     }
 
     // Default: Fetch Transactions (for GET with no type)
-    const auth = new google.auth.GoogleAuth({
-      credentials: { client_email: email, private_key: cleanKey },
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-    const sheets = google.sheets({ version: 'v4', auth });
-
     const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId.trim() });
     const sheetName = meta.data.sheets[0].properties.title;
     
