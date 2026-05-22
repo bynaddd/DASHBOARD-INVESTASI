@@ -37,7 +37,7 @@ function applyAccessControl() {
     }
   });
 
-  // Guest Restrictions: No Download, No Email Input
+  // Guest Restrictions: No Email Input
   const downloadDashboardBtn = document.getElementById('btnDownloadDashboard');
   const exportEmployeeBtn = document.getElementById('btnExportEmployee');
   const exportTransaksiBtn = document.getElementById('btnExportTransaksi');
@@ -55,8 +55,7 @@ function applyAccessControl() {
 
   downloadBtns.forEach(btn => {
     if (btn) {
-      if (isAdmin) btn.classList.remove('hidden');
-      else btn.classList.add('hidden');
+      btn.classList.remove('hidden');
     }
   });
 
@@ -4019,8 +4018,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
     if (page === 'transaksi') {
       globalFilterContainer?.classList.add('hidden');
-      if (isAdmin) exportBtn?.classList.remove('hidden');
-      else exportBtn?.classList.add('hidden');
+      exportBtn?.classList.remove('hidden');
     } else if (page === 'anomali') {
       globalFilterContainer?.classList.add('hidden');
       anomaliFilter?.classList.add('hidden');
@@ -4035,8 +4033,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
       globalFilterContainer?.classList.remove('hidden');
       typeFilter?.classList.remove('hidden');
       anomaliFilter?.classList.add('hidden');
-      if (isAdmin) exportBtn?.classList.remove('hidden');
-      else exportBtn?.classList.add('hidden');
+      exportBtn?.classList.remove('hidden');
     }
 
     // Fix for ECharts rendering tiny when container is display: none
