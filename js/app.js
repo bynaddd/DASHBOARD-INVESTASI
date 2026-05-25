@@ -41,6 +41,7 @@ function applyAccessControl() {
   const downloadDashboardBtn = document.getElementById('btnDownloadDashboard');
   const exportEmployeeBtn = document.getElementById('btnExportEmployee');
   const exportTransaksiBtn = document.getElementById('btnExportTransaksi');
+  const exportDoubleBtn = document.getElementById('btnExportDoubleDeposits');
   const downloadAnalyticsBtn = document.getElementById('btnDownloadAnalytics');
   const downloadAnomaliBtn = document.getElementById('btnDownloadAnomali');
   const emailContainer = document.getElementById('reviewerEmailContainer');
@@ -49,6 +50,7 @@ function applyAccessControl() {
     downloadDashboardBtn,
     exportEmployeeBtn,
     exportTransaksiBtn,
+    exportDoubleBtn,
     downloadAnalyticsBtn,
     downloadAnomaliBtn
   ];
@@ -1982,6 +1984,13 @@ function initDashboardFilter() {
       XLSX.utils.book_append_sheet(wb, ws, "Transaksi");
       XLSX.writeFile(wb, `Export_Transaksi_${new Date().toISOString().split('T')[0]}.xlsx`);
       toast('Data transaksi berhasil di-export', 'success');
+    };
+  }
+
+  const btnExportDouble = document.getElementById('btnExportDoubleDeposits');
+  if (btnExportDouble) {
+    btnExportDouble.onclick = () => {
+      exportDoubleDeposits();
     };
   }
 
@@ -4329,3 +4338,56 @@ document.querySelectorAll('.sys-status-chk').forEach(chk => {
     renderAnomaliTable();
   });
 });
+
+window.exportDoubleDeposits = function() {
+  const monthlyCounts = {};
+  
+  allData.filter(d => d.type === 'Tabungan' && d.date).forEach(d => {
+    const id = getEmpId(d);
+    const monthYear = d.date.getFullYear() + '-' + String(d.date.getMonth() + 1).padStart(2, '0');
+    const key = `${id}_${monthYear}`;
+    
+    if (!monthlyCounts[key]) {
+      monthlyCounts[key] = {
+        name: d.name,
+        nik: d.nik,
+        monthYear: `${monthNames[d.date.getMonth()]} ${d.date.getFullYear()}`,
+        count: 0,
+        totalNominal: 0,
+        txs: []
+      };
+    }
+    monthlyCounts[key].count++;
+    monthlyCounts[key].totalNominal += d.nominal;
+    monthlyCounts[key].txs.push(d);
+  });
+  
+  const doubleDeposits = Object.values(monthlyCounts).filter(item => item.count > 1);
+  
+  if (doubleDeposits.length === 0) {
+    toast('Tidak ditemukan data setoran ganda.', 'info');
+    return;
+  }
+  
+  const exportData = [];
+  let no = 1;
+  doubleDeposits.forEach(item => {
+    item.txs.forEach((tx, idx) => {
+      exportData.push({
+        No: idx === 0 ? no++ : '',
+        Bulan: item.monthYear,
+        Karyawan: tx.name,
+        NIK: tx.nik || '-',
+        'Tanggal Transaksi': tx.dateStr || fmtDate(tx.date),
+        'Nominal Setoran': tx.nominal,
+        'Total Setoran Bulan Ini': idx === 0 ? item.totalNominal : ''
+      });
+    });
+  });
+  
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Setoran Ganda");
+  XLSX.writeFile(wb, `Rekap_Setoran_Ganda_${new Date().toISOString().split('T')[0]}.xlsx`);
+  toast(`Berhasil mengekspor ${doubleDeposits.length} kasus setoran ganda`, 'success');
+};
