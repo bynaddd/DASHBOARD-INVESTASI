@@ -342,9 +342,30 @@ async function fetchData() {
         keterangan: ket,
         type: (ket.includes('debet') || ket.includes('penarikan')) ? 'Penarikan' : 'Tabungan',
         isEdited: row.isEdited,
+        isDeleted: row.isDeleted,
         notes: row.notes || ''
       };
     }).filter(x => x && x.name);
+
+    // Detect Double Deposits
+    const monthlyCounts = {};
+    allData.filter(d => d.type === 'Tabungan' && d.date).forEach(d => {
+      const id = getEmpId(d);
+      const monthYear = d.date.getFullYear() + '-' + String(d.date.getMonth() + 1).padStart(2, '0');
+      const key = `${id}_${monthYear}`;
+      if (!monthlyCounts[key]) monthlyCounts[key] = { count: 0, txs: [] };
+      monthlyCounts[key].count++;
+      monthlyCounts[key].txs.push(d);
+    });
+    
+    // Tag double deposits in allData
+    Object.values(monthlyCounts).forEach(item => {
+      if (item.count > 1) {
+        item.txs.forEach(tx => {
+          tx.isDoubleDeposit = true;
+        });
+      }
+    });
 
     // Normalisasi Nama dihapus agar semua variasi nama muncul di daftar
     allData.sort((a, b) => (a.date || 0) - (b.date || 0));
@@ -618,6 +639,7 @@ function renderSummary() {
   threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
   dataToUse.forEach(d => {
+    if (d.isDeleted) return;
     if (d.type === 'Tabungan') {
       totalIn += d.nominal;
       if (d.date && d.date >= threeMonthsAgo) activeEmpsSet.add(getEmpId(d));
@@ -668,6 +690,7 @@ function renderSummary() {
      const monthlyRate = 0.03 / 12;
      sorted.forEach(d => {
        
+       if (d.isDeleted) return;
        const id = getEmpId(d);
        if (!emps[id]) emps[id] = { balance: 0, lastInterestMonth: null };
        
@@ -755,6 +778,7 @@ function renderHealthAnalytics() {
   
   let totalIn = 0, totalOut = 0;
   dataToUse.forEach(d => {
+    if (d.isDeleted) return;
     const id = getEmpId(d);
     if (!emps[id]) return;
     if (d.type === 'Tabungan') {
@@ -822,6 +846,7 @@ function renderTrendChart() {
     const [y, m] = k.split('-');
     
     monthlyGroups[k].forEach(d => {
+      if (d.isDeleted) return;
       const id = getEmpId(d);
       if (!snapshotEmps[id]) snapshotEmps[id] = { balance: 0, principal: 0, lastInterestMonth: null };
       
@@ -900,6 +925,7 @@ function renderTrendChart() {
 function renderCashFlowChart() {
   const monthly = {};
   globalFilteredData.forEach(d => { if (!d.date) return; const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0'); if (!monthly[k]) monthly[k] = { in: 0, out: 0 }; d.type === 'Tabungan' ? monthly[k].in += d.nominal : monthly[k].out += d.nominal; });
+  globalFilteredData.forEach(d => { if (!d.date || d.isDeleted) return; const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0'); if (!monthly[k]) monthly[k] = { in: 0, out: 0 }; d.type === 'Tabungan' ? monthly[k].in += d.nominal : monthly[k].out += d.nominal; });
   const keys = Object.keys(monthly).sort().slice(-6); // last 6 months
   const labels = [], dataIn = [], dataOut = [], dataNet = [];
   keys.forEach(k => {
@@ -939,6 +965,7 @@ function renderFundCompositionChart() {
   const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
   let totalIn = 0, totalOut = 0;
   dataToUse.forEach(d => {
+    if (d.isDeleted) return;
     if (d.type === 'Tabungan') totalIn += d.nominal;
     else totalOut += d.nominal;
   });
@@ -997,6 +1024,7 @@ function renderTopInvestors() {
   const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
   const emps = {}; 
   dataToUse.forEach(d => {
+    if (d.isDeleted) return;
     const id = getEmpId(d);
     if (!emps[id]) emps[id] = { balance: 0, name: d.name };
     emps[id].balance += d.type === 'Tabungan' ? d.nominal : -d.nominal;
@@ -1030,7 +1058,7 @@ function renderTopInvestors() {
 // ===== RECENT TABLE =====
 function renderRecentTable(query = '') {
   const q = query.toLowerCase().trim();
-  let filtered = [...globalFilteredData].filter(d => d.date);
+  let filtered = [...globalFilteredData].filter(d => d.date && !d.isDeleted);
   if (q) {
     filtered = filtered.filter(d => d.name.toLowerCase().includes(q) || (d.nik && d.nik.toLowerCase().includes(q)) || d.jenis.toLowerCase().includes(q));
   }
@@ -1041,6 +1069,7 @@ function renderRecentTable(query = '') {
   
   const empStats = {};
   allData.forEach(d => {
+    if (d.isDeleted) return;
     const id = getEmpId(d);
     if (!empStats[id]) empStats[id] = { count: 0, last: null, balance: 0, totalOut: 0 };
     if (d.type === 'Tabungan') {
@@ -1099,7 +1128,7 @@ function calculateAnomalies() {
     }
   });
 
-  const sortedData = allData.filter(d => d.date);
+  const sortedData = allData.filter(d => d.date && !d.isDeleted);
   const emps = {};
   allAnomalies = [];
   const reviewMap = {};
@@ -1180,31 +1209,47 @@ function calculateAnomalies() {
       const txKeyNik = `anomali_${idNik}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
       const txKeyName = `anomali_${idName}_${t.date?.getTime() || 0}_${t.nominal}`.replace(/\s+/g, '_');
       
-      const review = reviewMap[txKeyNik] || reviewMap[txKeyName];
+      let review = reviewMap[txKeyNik] || reviewMap[txKeyName];
       
-      // Jika tidak ketemu langsung, cari apakah ada review yang mengoreksi NAMA/NIK menjadi data saat ini
       let correctionReview = null;
+      // Hanya cari koreksi jika tidak ada review langsung yang ditemukan.
+      // Ini mengasumsikan bahwa jika tidak ada review, namanya mungkin telah berubah.
       if (!review) {
         correctionReview = allReviews.find(r => 
           (r.correctName === t.name || r.correctNik === t.nik) && 
-          Math.abs(r.nominal - t.nominal) < 1 &&
-          r.txKey.includes(t.date?.getTime().toString())
+          Math.abs(r.nominal - t.nominal) < 1
         );
+        // Jika koreksi ditemukan, gunakan txKey lama untuk menemukan review TERBARU.
+        if (correctionReview) {
+          review = reviewMap[correctionReview.txKey];
+        }
       }
 
       const activeReview = review || correctionReview;
       const txKey = activeReview ? activeReview.txKey : txKeyNik;
       
-      // Simpan Nama Asli dari Identity Audit Trail (Global untuk yang lain, Lokal untuk A. Maksum)
-      let originalName = t.name;
-      const isMaksum = t.name.toLowerCase().includes('maksum') || t.nik === '3525161506750122';
-      if (!isMaksum) {
-        originalName = globalNameAudit[t.nik] || globalNameAudit[t.name] || t.name;
+      let manualStatus = 'MENUNGGU REVIEW';
+      if (activeReview) {
+          if (activeReview.status === 'MENUNGGU REVIEW' || activeReview.status === 'In Progress') manualStatus = 'MENUNGGU REVIEW';
+          else if (activeReview.status === 'SALAH INPUT' || activeReview.status === 'Salah Orang') manualStatus = 'SALAH INPUT';
+          else if (activeReview.status === 'TERBUKTI' || activeReview.status === 'Verified') manualStatus = 'TERBUKTI';
+          else manualStatus = activeReview.status;
       }
-      
-      // Jika di review ini ada info nama asli yang lebih spesifik, gunakan itu
-      if (activeReview && activeReview.txKey) {
-        const parts = activeReview.txKey.split('_');
+
+      // Simpan Nama Asli dari Identity Audit Trail
+      let originalName = t.name;
+
+      // Gunakan globalNameAudit sebagai fallback untuk menelusuri nama asli sebelum dikoreksi
+      if (globalNameAudit[t.nik]) {
+        originalName = globalNameAudit[t.nik];
+      } else if (globalNameAudit[t.name]) {
+        originalName = globalNameAudit[t.name];
+      }
+
+      // Jika ini adalah kasus yang dikoreksi (correctionReview ditemukan),
+      // maka kita perlu mengekstrak nama asli dari txKey lama.
+      if (correctionReview && correctionReview.txKey) {
+        const parts = correctionReview.txKey.split('_');
         if (parts.length >= 4) {
           let nameFromKey = parts.slice(1, -2).join(' ');
           
@@ -1224,14 +1269,6 @@ function calculateAnomalies() {
       const isDeficit = balance < -10000;
 
       if (t.type === 'Penarikan' && (isDeficit || activeReview)) {
-        let manualStatus = 'MENUNGGU REVIEW';
-        if (activeReview) {
-            if (activeReview.status === 'MENUNGGU REVIEW' || activeReview.status === 'In Progress') manualStatus = 'MENUNGGU REVIEW';
-            else if (activeReview.status === 'SALAH INPUT' || activeReview.status === 'Salah Orang') manualStatus = 'SALAH INPUT';
-            else if (activeReview.status === 'TERBUKTI' || activeReview.status === 'Verified') manualStatus = 'TERBUKTI';
-            else manualStatus = activeReview.status;
-        }
-
         // Hitung berapa defisit yang diciptakan oleh transaksi ini
         const deficitCreated = isDeficit ? (balanceBefore > 0 ? Math.abs(balance) : t.nominal) : 0;
 
@@ -1349,12 +1386,14 @@ function renderAnomaliTable() {
     }
     
     // 2.5 Visibility Logic
-    // Kasus tampil jika: (Sedang Mencurigakan/Dicicil) ATAU (Sudah Terbukti meskipun Lunas)
-    const isVisibleByDefault = (a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL' || a.status === 'TERBUKTI');
+    const isKoreksi = (a.status === 'SALAH INPUT' || (a.originalName && a.originalName !== a.name));
     
-    if (checkedStatuses.length > 0) {
-      pass = pass && checkedStatuses.includes(a.systemStatus);
+    if (filterStatus === 'SALAH INPUT') {
+      // Bypass filter checkbox sistem jika user secara eksplisit memfilter "Koreksi"
+    } else if (checkedStatuses.length > 0) {
+      pass = pass && (checkedStatuses.includes(a.systemStatus) || isKoreksi);
     } else {
+      const isVisibleByDefault = (a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL' || a.status === 'TERBUKTI' || isKoreksi);
       pass = pass && isVisibleByDefault;
     }
 
@@ -1759,8 +1798,13 @@ async function saveReview() {
   const reviewer = document.getElementById('reviewerEmail').value.trim() || 'anonymous@moneybox.com';
   const password = document.getElementById('reviewPassword').value;
 
-  const correctName = document.getElementById('correctName').value.trim();
-  const correctNik = document.getElementById('correctNik').value.trim();
+  let correctName = document.getElementById('correctName').value.trim();
+  let correctNik = document.getElementById('correctNik').value.trim();
+
+  if (status !== 'SALAH INPUT' && status !== 'Salah Orang') {
+    correctName = '';
+    correctNik = '';
+  }
 
   if (status === 'SALAH INPUT' && (!correctName || !correctNik)) {
     toast('Silakan isi nama dan NIK koreksi', 'error');
@@ -1987,13 +2031,6 @@ function initDashboardFilter() {
     };
   }
 
-  const btnExportDouble = document.getElementById('btnExportDoubleDeposits');
-  if (btnExportDouble) {
-    btnExportDouble.onclick = () => {
-      exportDoubleDeposits();
-    };
-  }
-
   const btnExportEmp = document.getElementById('btnExportEmployee');
   if (btnExportEmp) {
     btnExportEmp.onclick = () => {
@@ -2060,7 +2097,11 @@ function getFilteredTx() {
              (d.nik && d.nik.toLowerCase().includes(search));
     });
   }
-  if (type) data = data.filter(d => d.type === type);
+  if (type === 'Setoran Ganda') {
+    data = data.filter(d => d.isDoubleDeposit);
+  } else if (type) {
+    data = data.filter(d => d.type === type);
+  }
   
   const mode = document.getElementById('txFilterMode')?.value || 'custom';
   const yearVal = document.getElementById('txFilterYear')?.value || new Date().getFullYear().toString();
@@ -2088,6 +2129,14 @@ function getFilteredTx() {
       let va, vb; switch (txSort.col) { case 0: va = a.no; vb = b.no; break; case 1: va = a.date || 0; vb = b.date || 0; break; case 2: va = a.name; vb = b.name; break; case 4: va = a.nominal; vb = b.nominal; break; default: return 0; }
       if (va < vb) return txSort.asc ? -1 : 1; if (va > vb) return txSort.asc ? 1 : -1; return 0;
     });
+  } else if (type === 'Setoran Ganda') {
+    data.sort((a, b) => {
+      const nameA = a.name.toLowerCase();
+      const nameB = b.name.toLowerCase();
+      if (nameA < nameB) return -1;
+      if (nameA > nameB) return 1;
+      return (a.date || 0) - (b.date || 0);
+    });
   }
   return data;
 }
@@ -2096,7 +2145,6 @@ function renderTxTable() {
   const mode = document.getElementById('txFilterMode')?.value || 'custom';
   const yearVal = document.getElementById('txFilterYear')?.value || new Date().getFullYear().toString();
   const year = yearVal === 'all' ? 'all' : parseInt(yearVal);
-  const type = document.getElementById('txFilterType')?.value || '';
 
   // Populate Year Dropdown if empty
   const yrSel = document.getElementById('txFilterYear');
@@ -2106,11 +2154,52 @@ function renderTxTable() {
     yrSel.innerHTML = `<option value="all">Semua Tahun</option>` + years.map(y => `<option value="${y}" ${y === new Date().getFullYear() ? 'selected' : ''}>${y}</option>`).join('');
   }
 
-  const data = getFilteredTx(); const total = data.length; const pages = Math.ceil(total / txPerPage) || 1;
+  const data = getFilteredTx();
+
+  // Monthly Recap Logic for Global Transactions
+  if (mode === 'monthly') {
+    const monthlyRecap = Array.from({ length: 12 }, (_, i) => ({
+      monthIdx: i,
+      monthName: monthNames[i],
+      totalIn: 0,
+      totalOut: 0
+    }));
+
+    data.forEach(d => {
+      if (d.isDeleted) return;
+      // Data is already filtered by year in getFilteredTx, so we just group by month
+      if (d.date) {
+        const mIdx = d.date.getMonth();
+        if (d.type === 'Tabungan') monthlyRecap[mIdx].totalIn += d.nominal;
+        else monthlyRecap[mIdx].totalOut += d.nominal;
+      }
+    });
+
+    document.querySelector('#txRecapTable tbody').innerHTML = monthlyRecap.map(m => {
+      const net = m.totalIn - m.totalOut;
+      const netColor = net >= 0 ? '#10b981' : '#ef4444';
+      // Use a valid year for the detail button, even if 'all' is selected
+      const recapYear = (year === 'all') ? new Date().getFullYear() : year;
+      return `
+        <tr>
+          <td style="font-weight:600;">${m.monthName} ${year === 'all' ? '(Semua Tahun)' : year}</td>
+          <td style="color:#10b981;">${fmt(m.totalIn)}</td>
+          <td style="color:#ef4444;">${fmt(m.totalOut)}</td>
+          <td style="font-weight:700; color:${netColor};">${fmt(net)}</td>
+          <td><button class="btn btn-outline" style="padding: 2px 8px; font-size:0.7rem;" onclick="txFilterMode.value='custom'; txFilterStartMonth.value='${recapYear}-${String(m.monthIdx).padStart(2,'0')}'; txFilterEndMonth.value='${recapYear}-${String(m.monthIdx).padStart(2,'0')}'; txFilterMode.dispatchEvent(new Event('change'));" title="Detail"><i class="fas fa-search"></i></button></td>
+        </tr>
+      `;
+    }).join('');
+    return; // Stop execution for monthly mode
+  }
+
+  // --- Logic for 'custom' (list) mode ---
+  const total = data.length; const pages = Math.ceil(total / txPerPage) || 1;
 
   // Hitung ringkasan uang masuk/keluar dari data yang terfilter
   let totalIn = 0, totalOut = 0;
   data.forEach(d => {
+    if (d.isDeleted) return;
     if (d.type === 'Tabungan') totalIn += d.nominal;
     else totalOut += d.nominal;
   });
@@ -2132,63 +2221,59 @@ function renderTxTable() {
     `;
   }
 
-  // Monthly Recap Logic for Global Transactions
-  if (mode === 'monthly') {
-    const monthlyRecap = Array.from({ length: 12 }, (_, i) => ({
-      monthIdx: i,
-      monthName: monthNames[i],
-      totalIn: 0,
-      totalOut: 0
-    }));
-
-    data.forEach(d => {
-      if (d.date && d.date.getFullYear() === year) {
-        const mIdx = d.date.getMonth();
-        if (d.type === 'Tabungan') monthlyRecap[mIdx].totalIn += d.nominal;
-        else monthlyRecap[mIdx].totalOut += d.nominal;
-      }
-    });
-
-    document.querySelector('#txRecapTable tbody').innerHTML = monthlyRecap.map(m => {
-      const net = m.totalIn - m.totalOut;
-      const netColor = net >= 0 ? '#10b981' : '#ef4444';
-      return `
-        <tr>
-          <td style="font-weight:600;">${m.monthName} ${year}</td>
-          <td style="color:#10b981;">${fmt(m.totalIn)}</td>
-          <td style="color:#ef4444;">${fmt(m.totalOut)}</td>
-          <td style="font-weight:700; color:${netColor};">${fmt(net)}</td>
-          <td><button class="btn btn-outline" style="padding: 2px 8px; font-size:0.7rem;" onclick="txFilterMode.value='custom'; txFilterStartMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterEndMonth.value='${year}-${String(m.monthIdx).padStart(2,'0')}'; txFilterMode.dispatchEvent(new Event('change'));" title="Detail"><i class="fas fa-search"></i></button></td>
-        </tr>
-      `;
-    }).join('');
-  }
-
   if (txPage > pages) txPage = pages;
+
+  const getSortIcon = (col) => {
+    if (txSort.col !== col) return '<i class="fas fa-sort"></i>';
+    return txSort.asc ? '<i class="fas fa-sort-up"></i>' : '<i class="fas fa-sort-down"></i>';
+  };
+  document.querySelector('#txTable thead').innerHTML = `<tr>
+    <th class="sortable" data-col="0" style="cursor:pointer">No ${getSortIcon(0)}</th>
+    <th class="sortable" data-col="1" style="cursor:pointer">Tanggal ${getSortIcon(1)}</th>
+    <th class="sortable" data-col="2" style="cursor:pointer">Karyawan ${getSortIcon(2)}</th>
+    <th>Jenis Potongan</th>
+    <th class="sortable" data-col="4" style="cursor:pointer">Nominal ${getSortIcon(4)}</th>
+    <th>Tipe</th>
+    <th>Aksi</th>
+  </tr>`;
+
   const start = (txPage - 1) * txPerPage; const slice = data.slice(start, start + txPerPage);
   document.querySelector('#txTable tbody').innerHTML = slice.map((d, i) => {
     const link = getLinkFromKeterangan(d.keterangan);
     const linkBtn = link ? `<a href="${link}" target="_blank" class="btn-view-tf"><i class="fas fa-external-link-alt"></i> Lihat TF</a>` : '';
 
+    const isDeleted = d.isDeleted;
+    const rowColor = isDeleted ? 'color: #94a3b8;' : '';
     // Cek apakah transaksi ini anomali
     const txKey = `anomali_${getEmpId(d)}_${d.date?.getTime() || 0}_${d.nominal}`.replace(/\s+/g, '_');
     const isSuspicious = allAnomalies.some(a => a.txKey === txKey && a.status === 'MENUNGGU REVIEW');
-    const highlightBg = isSuspicious ? 'background-color: rgba(239, 68, 68, 0.08);' : '';
+    const highlightBg = isDeleted ? 'background-color: #f1f5f9; opacity: 0.5;' : (isSuspicious ? 'background-color: rgba(239, 68, 68, 0.08);' : '');
     const escName = d.name.replace(/'/g, "\\'");
     const empNik = d.nik || '';
 
     const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Meragukan"></i>` : '';
+    const ignoredIcon = isDeleted ? `<i class="fas fa-ban" style="color:#94a3b8; margin-right:4px;" title="Transaksi Diabaikan"></i>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
-    const editBtn = (isAdmin && d.type === 'Penarikan') ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
+    const canEdit = d.type === 'Penarikan' || (d.type === 'Tabungan' && d.isDoubleDeposit);
+    const editBtn = (isAdmin && canEdit) ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}', ${d.isDoubleDeposit ? 'true' : 'false'})"><i class="fas fa-pencil-alt"></i></button>` : '';
 
-    const editedBadge = d.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${d.notes || '-'}">DIEDIT</span>` : '';
+    const deletedBadge = isDeleted ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fee2e2; color: #ef4444; border: 1px solid #fecaca; border-radius: 4px; vertical-align: middle; text-decoration: none;" title="Data Diabaikan: ${d.notes || '-'}">DIABAIKAN / TIDAK DIHITUNG</span>` : '';
+    const editedBadge = (!isDeleted && d.isEdited) ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${d.notes || '-'}">DIEDIT</span>` : '';
     
     const anom = allAnomalies.find(a => a.originalNo === d.sheetRow);
     const correctedBadge = (anom && anom.originalName && anom.originalName !== anom.name) ? `<span class="badge-status status-verified" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; vertical-align: middle;" title="Koreksi Nama dari data sebelumnya: ${anom.originalName}\nAdmin: ${anom.reviewer || '-'}">NAMA DIKOREKSI</span>` : '';
 
+    const empIdForAlias = getEmpId(d);
+    const variationsSet = allAliasesMap[empIdForAlias];
+    const aliases = variationsSet ? Array.from(variationsSet).filter(v => v !== d.name) : [];
+    const variationsHtml = aliases.length > 0 ? `<div style="font-size:0.65rem; color:#64748b; font-style:italic; line-height: 1.2; margin-top: 2px;">Alias: ${aliases.join(', ')}</div>` : '';
+    const nikHtml = d.nik && d.nik !== '-' ? `<div style="font-size:0.7rem; color:#94a3b8; margin-top: 2px;">NIK: ${d.nik}</div>` : '';
+    
+    const nominalDisplay = isDeleted ? `<del style="color: #94a3b8;">${fmt(d.nominal)}</del>` : fmt(d.nominal);
+
     return `<tr style="${highlightBg}">
-    <td>${alertIcon}${start + i + 1}</td><td>${d.dateStr || fmtDate(d.date)}</td><td>${d.name}${editedBadge}${correctedBadge}</td><td>${d.jenis}</td>
-    <td style="font-weight:600">${fmt(d.nominal)}</td>
+    <td style="${rowColor}">${ignoredIcon}${alertIcon}${start + i + 1}</td><td style="${rowColor}">${d.dateStr || fmtDate(d.date)}</td><td style="${rowColor}"><div style="font-weight:600;">${d.name}${deletedBadge}${editedBadge}${correctedBadge}</div>${variationsHtml}${nikHtml}</td><td style="${rowColor}">${d.jenis}</td>
+    <td style="font-weight:600; ${rowColor}">${nominalDisplay}</td>
     <td><span class="badge ${d.type === 'Tabungan' ? 'in' : 'out'}">${d.type}</span> ${linkBtn}</td>
     <td>
       ${editBtn}
@@ -2226,14 +2311,17 @@ function renderTxTable() {
         const customGrp = document.getElementById('txFilterCustomGroup');
         const yearGrp = document.getElementById('txFilterYearGroup');
         const recapContainer = document.getElementById('txMonthlyRecapContainer');
+        const listContainer = document.getElementById('txListContainer');
         if (mode === 'monthly') {
           customGrp.classList.add('hidden');
           yearGrp.classList.remove('hidden');
           recapContainer.classList.remove('hidden');
+          if (listContainer) listContainer.classList.add('hidden');
         } else {
           customGrp.classList.remove('hidden');
           yearGrp.classList.add('hidden');
           recapContainer.classList.add('hidden');
+          if (listContainer) listContainer.classList.remove('hidden');
         }
         
         // Sync button group visually if changed programmatically
@@ -2283,17 +2371,52 @@ if (btnClearTxFilter) {
 }
 
 // ===== EDIT TRANSACTION MODAL =====
-window.openEditModal = function(sheetRow, name, nominal, nik, type, dateStr) {
+window.openEditModal = function(sheetRow, name, nominal, nik, type, dateStr, isDouble = false) {
   document.getElementById('editTxRowNo').value = sheetRow;
   document.getElementById('editTxName').value = name;
   document.getElementById('editTxNominal').value = Math.abs(nominal);
   document.getElementById('editTxNik').value = nik;
   document.getElementById('editTxType').value = type;
   document.getElementById('editTxDate').value = dateStr;
-  document.getElementById('editTxPassword').value = ''; // Reset password field
-  document.getElementById('editTxNotes').value = ''; // Reset notes field
+  document.getElementById('editTxPassword').value = ''; 
+  document.getElementById('editTxNotes').value = ''; 
+  
+  // Kunci field jika yang diedit adalah setoran ganda
+  const dateField = document.getElementById('editTxDate');
+  const nominalField = document.getElementById('editTxNominal');
+  const typeField = document.getElementById('editTxType');
+  
+  if (isDouble) {
+    dateField.disabled = true;
+    nominalField.disabled = true;
+    typeField.disabled = true;
+  } else {
+    dateField.disabled = false;
+    nominalField.disabled = false;
+    typeField.disabled = false;
+  }
+
+  // Set default action
+  const radios = document.getElementsByName('editTxAction');
+  radios[0].checked = true;
+  document.getElementById('editTxFormFields').style.opacity = '1';
+  document.getElementById('editTxFormFields').style.pointerEvents = 'auto';
+  
   document.getElementById('modalEditTx').classList.remove('hidden');
 };
+
+document.getElementsByName('editTxAction').forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    const fields = document.getElementById('editTxFormFields');
+    if (e.target.value === 'hapus') {
+      fields.style.opacity = '0.5';
+      fields.style.pointerEvents = 'none';
+    } else {
+      fields.style.opacity = '1';
+      fields.style.pointerEvents = 'auto';
+    }
+  });
+});
 
 // Autocomplete Logic for Modals
 function setupAutocomplete(inputId, resultsId, targetNameId, targetNikId) {
@@ -2355,6 +2478,7 @@ function initEditModal() {
   setupAutocomplete('editTxNik', 'editTxNikResults', 'editTxName', 'editTxNik');
 
   btnSave.onclick = async () => {
+    const action = document.querySelector('input[name="editTxAction"]:checked').value;
     const rowNo = parseInt(document.getElementById('editTxRowNo').value);
     const rawDate = document.getElementById('editTxDate').value;
     const dateObj = parseDateStr(rawDate);
@@ -2366,9 +2490,16 @@ function initEditModal() {
     const nik = document.getElementById('editTxNik').value;
     const type = document.getElementById('editTxType').value;
     const pass = document.getElementById('editTxPassword').value;
+    let notes = document.getElementById('editTxNotes').value;
 
-    if (!date || !name || isNaN(nominal) || !pass) {
+    if (action === 'hapus') {
+      notes = notes ? `[DIHAPUS] ${notes}` : '[DIHAPUS] Data diabaikan';
+    } else if (!date || !name || isNaN(nominal) || !pass) {
       toast('Harap isi semua data termasuk password konfirmasi!', 'error');
+      return;
+    }
+    if (!pass) {
+      toast('Harap masukkan password konfirmasi admin!', 'error');
       return;
     }
 
@@ -2381,8 +2512,17 @@ function initEditModal() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'updateRow',
-          pass, // Send password for verification
-          updateData: { rowNo, date, name, nominal, nik, type, notes: document.getElementById('editTxNotes').value }
+          pass, 
+          updateData: { 
+            rowNo, 
+            date, 
+            name, 
+            nominal, 
+            nik, 
+            type, 
+            notes,
+            isDeleted: action === 'hapus'
+          }
         })
       });
       const res = await resp.json();
@@ -2618,6 +2758,7 @@ function showEmployee(name, nik = '') {
 
   let totalIn = 0, totalOut = 0, lifeIn = 0, lifeOut = 0, lastContributionDate = null;
   allTxs.forEach(d => {
+    if (d.isDeleted) return;
     d.type === 'Tabungan' ? lifeIn += d.nominal : lifeOut += d.nominal;
     let pass = true;
     if (startDate && d.date) pass = pass && d.date >= startDate;
@@ -2635,6 +2776,7 @@ function showEmployee(name, nik = '') {
     let lastInterestMonth = null;
     
     sortedTxs.forEach(tx => {
+      if (tx.isDeleted) return;
       let pending = 0;
       const txMonth = tx.date ? (tx.date.getFullYear() + '-' + tx.date.getMonth()) : null;
 
@@ -2710,6 +2852,7 @@ function showEmployee(name, nik = '') {
     const sortedAll = [...allTxs].filter(d => d.date && d.date < startDate).sort((a, b) => a.date - b.date);
     
     sortedAll.forEach(tx => {
+      if (tx.isDeleted) return;
       const txMonth = tx.date.getFullYear() + '-' + tx.date.getMonth();
       if (tx.type === 'Tabungan') {
         let interest = 0;
@@ -2869,16 +3012,18 @@ function showEmployee(name, nik = '') {
       let currentInterest = 0;
       const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
 
-      if (d.type === 'Tabungan') {
-        if (txMonth && tableLastInterestMonth !== txMonth) {
-          if (tableRunBal > 0) currentInterest = tableRunBal * 0.0025;
-          tableLastInterestMonth = txMonth;
+      if (!d.isDeleted) {
+        if (d.type === 'Tabungan') {
+          if (txMonth && tableLastInterestMonth !== txMonth) {
+            if (tableRunBal > 0) currentInterest = tableRunBal * 0.0025;
+            tableLastInterestMonth = txMonth;
+          }
+          tableRunBal += currentInterest;
+          tableRunBal += d.nominal;
+        } else {
+          tableRunBal -= d.nominal;
+          currentInterest = 0;
         }
-        tableRunBal += currentInterest;
-        tableRunBal += d.nominal;
-      } else {
-        tableRunBal -= d.nominal;
-        currentInterest = 0;
       }
 
       let pass = true;
@@ -2930,9 +3075,15 @@ function showEmployee(name, nik = '') {
         if (statusBadgeText) {
           jenisDisplay += `<br/>${statusBadgeText}`;
         }
+        if (d.isDeleted) {
+          jenisDisplay += `<br/><span class="badge-status" style="background:#fee2e2; color:#ef4444; border:1px solid #fecaca; font-size:0.6rem; padding: 1px 4px; border-radius: 4px; display:inline-block; margin-top:2px;">DIABAIKAN / TIDAK DIHITUNG</span>`;
+          jenisDisplay += `<br/><span style="color:#ef4444; font-style:italic; font-size:0.75rem; display:inline-block; margin-top:2px;">(transaksi diabaikan)</span>`;
+          highlightBg = 'background-color: #f1f5f9; opacity: 0.5;';
+          alertIcon = `<i class="fas fa-ban" style="color:#94a3b8; margin-right:4px;" title="Transaksi Diabaikan"></i>` + alertIcon;
+        }
 
         // Tampilkan bunga yang cair di baris ini
-        const bungaDisplay = currentInterest > 0 ? fmt(currentInterest) : '-';
+        const bungaDisplay = (currentInterest > 0 && !d.isDeleted) ? fmt(currentInterest) : '-';
 
         tableData.push({
           date: d.date,
@@ -2941,15 +3092,17 @@ function showEmployee(name, nik = '') {
           linkBtn,
           nominal: d.nominal,
           type: d.type,
-          bunga: currentInterest,
+          bunga: d.isDeleted ? 0 : currentInterest,
           bungaDisplay,
           balance: tableRunBal,
           highlightBg,
           alertIcon,
           isEdited: d.isEdited,
+          isDeleted: d.isDeleted,
           sheetRow: d.sheetRow,
           name: d.name,
-          nik: d.nik
+          nik: d.nik,
+          isDoubleDeposit: d.isDoubleDeposit
         });
       }
     });
@@ -2979,19 +3132,21 @@ function showEmployee(name, nik = '') {
   });
 
   document.querySelector('#empTable tbody').innerHTML = tableData.map((row, idx) => {
-    const editedBadge = row.isEdited ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${row.notes || '-'}">DIEDIT</span>` : '';
+    const editedBadge = (!row.isDeleted && row.isEdited) ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${row.notes || '-'}">DIEDIT</span>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
-    const editBtn = (isAdmin && row.type === 'Penarikan') ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-left: 4px;" onclick="openEditModal(${row.sheetRow}, '${row.name.replace(/'/g, "\\'")}', ${row.nominal}, '${row.nik || ''}', '${row.type}', '${row.dateStr}')"><i class="fas fa-pencil-alt"></i></button>` : '';
+    const canEdit = row.type === 'Penarikan' || (row.type === 'Tabungan' && row.isDoubleDeposit);
+    const editBtn = (isAdmin && canEdit) ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-left: 4px;" onclick="openEditModal(${row.sheetRow}, '${row.name.replace(/'/g, "\\'")}', ${row.nominal}, '${row.nik || ''}', '${row.type}', '${row.dateStr}', ${row.isDoubleDeposit ? 'true' : 'false'})"><i class="fas fa-pencil-alt"></i></button>` : '';
 
-    const rowColorStyle = row.balance < 0 ? 'color: #ef4444;' : '';
+    const rowColorStyle = row.isDeleted ? 'color: #94a3b8;' : (row.balance < 0 ? 'color: #ef4444;' : '');
+    const nominalDisplay = row.isDeleted ? `<del style="color: #94a3b8;">${fmt(row.nominal)}</del>` : fmt(row.nominal);
 
     return `
     <tr style="${row.highlightBg} ${rowColorStyle}">
-      <td style="font-size: 0.8rem; color: ${row.balance < 0 ? '#ef4444' : '#64748b'}; font-weight: 500;">${idx + 1}</td>
-      <td style="color: ${row.balance < 0 ? '#ef4444' : ''};">${row.alertIcon}${row.dateStr}${editedBadge}</td>
-      <td style="font-size: 0.8rem; color: ${row.balance < 0 ? '#ef4444' : '#64748b'}; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.name}">${row.name}</td>
+      <td style="font-size: 0.8rem; color: ${row.isDeleted ? '#94a3b8' : (row.balance < 0 ? '#ef4444' : '#64748b')}; font-weight: 500;">${idx + 1}</td>
+      <td style="color: ${row.isDeleted ? '#94a3b8' : (row.balance < 0 ? '#ef4444' : '')};">${row.alertIcon}${row.dateStr}${editedBadge}</td>
+      <td style="font-size: 0.8rem; color: ${row.isDeleted ? '#94a3b8' : (row.balance < 0 ? '#ef4444' : '#64748b')}; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${row.name}">${row.name}</td>
       <td style="color: ${row.balance < 0 ? '#ef4444' : ''};">${row.jenis}${row.linkBtn}</td>
-      <td style="font-weight:600; color: ${row.balance < 0 ? '#ef4444' : ''};">${fmt(row.nominal)}</td>
+      <td style="font-weight:600; color: ${row.balance < 0 ? '#ef4444' : ''};">${nominalDisplay}</td>
       <td><span class="badge ${row.type === 'Tabungan' ? 'in' : 'out'}">${row.type}</span></td>
       <td style="color:${row.balance < 0 ? '#ef4444' : '#f59e0b'}; font-weight:600;">${row.bungaDisplay}</td>
       <td style="font-weight:700; color:${row.balance < 0 ? '#ef4444' : '#334155'};">${fmt(row.balance)}</td>
@@ -3018,6 +3173,7 @@ function showEmployee(name, nik = '') {
     const allChronological = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
     
     allChronological.forEach(d => {
+      if (d.isDeleted) return;
       const year = d.date.getFullYear();
       const monthIdx = d.date.getMonth();
       const txMonth = year + '-' + monthIdx;
@@ -3228,6 +3384,7 @@ function renderAnalyticsContent() {
   const monthlyRate = 0.03 / 12;
   const sorted = [...cumulativeData].sort((a,b)=>a.date-b.date);
   sorted.forEach(d => {
+    if (d.isDeleted) return;
     const id = typeof getEmpId === 'function' ? getEmpId(d) : (d.nik || d.name);
     if (!emps[id]) emps[id] = { balance: 0, lastInterestMonth: null };
     
@@ -3263,8 +3420,8 @@ function renderAnalyticsContent() {
 }
 
 function renderFinancialKpis(data, anoms, totalSaldoWithInterest = 0) {
-  const totalIn = data.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
-  const totalOut = data.filter(d => d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
+  const totalIn = data.filter(d => !d.isDeleted && d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
+  const totalOut = data.filter(d => !d.isDeleted && d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
   
   // Over-withdraw logic
   const totalInitialLoss = anoms.reduce((sum, a) => sum + (a.initialDebt || 0), 0);
@@ -3501,8 +3658,8 @@ function exportAnalyticsReport() {
   const wb = XLSX.utils.book_new();
 
   // 1. KPI Summary Sheet
-  const totalIn = filtered.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
-  const totalOut = filtered.filter(d => d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
+  const totalIn = filtered.filter(d => !d.isDeleted && d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
+  const totalOut = filtered.filter(d => !d.isDeleted && d.type === 'Penarikan').reduce((sum, d) => sum + d.nominal, 0);
   const initialLoss = anomFiltered.reduce((sum, a) => sum + (a.initialDebt || 0), 0);
   const remainingLoss = anomFiltered.reduce((sum, a) => sum + (a.remainingDebt || 0), 0);
   const recovery = initialLoss - remainingLoss;
@@ -3625,10 +3782,9 @@ function handleExcel(file) {
       const dateIdx = headers.findIndex(h => h.includes('tanggal') || h.includes('bulan') || h.includes('waktu') || h.includes('date') || h.includes('tgl'));
 
       _uploadData = [];
-      let doubleCount = 0;
-      const currentUploadMap = new Map();
+      let allUploadRows = [];
 
-      json.slice(headerRowIdx + 1).filter(r => r.length > 0).forEach(r => {
+      json.slice(headerRowIdx + 1).filter(r => r.length > 0).forEach((r, idx) => {
         let rawNom = nomIdx >= 0 ? r[nomIdx] : r[2];
         let nominal = typeof rawNom === 'number' ? rawNom : (Number(String(rawNom || '').replace(/\./g, '').replace(/,/g, '.').replace(/[^0-9.-]/g, '')) || 0);
         if (!nominal) return;
@@ -3644,60 +3800,96 @@ function handleExcel(file) {
 
         let rawNik = nikIdx >= 0 ? String(r[nikIdx] || '').trim() : '';
         if (nikIdx >= 0 && typeof r[nikIdx] === 'number') {
-          const cellRef = XLSX.utils.encode_cell({ r: headerRowIdx + 1 + _uploadData.length, c: nikIdx });
+          const cellRef = XLSX.utils.encode_cell({ r: headerRowIdx + 1 + idx, c: nikIdx });
           if (ws[cellRef] && ws[cellRef].w) rawNik = ws[cellRef].w.replace(/[^0-9]/g, '');
         }
         let rawName = namaIdx >= 0 ? String(r[namaIdx] || '').trim() : String(r[1] || '').trim();
 
         if (!rawName && !rawNik) return;
 
-        const identifier = rawNik ? rawNik.toLowerCase() : rawName.toLowerCase();
-        const dStr = String(dateVal).toLowerCase().trim();
-        const groupKey = `Tabungan_${identifier}_${dStr}`;
-
-        if (currentUploadMap.has(groupKey)) {
-          currentUploadMap.get(groupKey).nominal += nominal;
-        } else {
-          currentUploadMap.set(groupKey, {
-            raw: r,
-            dateVal,
-            nominal,
-            nik: rawNik,
-            nama: rawName || rawNik
-          });
-        }
+        allUploadRows.push({
+          id: idx,
+          raw: r,
+          dateVal,
+          nominal,
+          nik: rawNik,
+          nama: rawName || rawNik
+        });
       });
 
-      currentUploadMap.forEach((val, key) => {
+      let doubleCount = 0;
+      allUploadRows.forEach(val => {
         let isDouble = allData.some(x => x.type === 'Tabungan' && x.name.toLowerCase().trim() === val.nama.toLowerCase().trim() && String(x.dateStr).toLowerCase().trim() === String(val.dateVal).toLowerCase().trim() && x.nominal === val.nominal);
-
+        val.isDouble = isDouble;
+        val.forceKeep = false;
         if (isDouble) doubleCount++;
-        _uploadData.push({ ...val, isDouble });
       });
 
-      const preview = document.getElementById('previewSection');
-      preview.classList.remove('hidden');
-      document.getElementById('previewCount').textContent = _uploadData.length;
-      document.querySelector('#previewTable tbody').innerHTML = _uploadData.slice(0, 20).map((d, i) => {
-        let jenis = 'Lainnya';
-        if (d.nominal === 50000 || d.nominal === 100000) jenis = 'Investasi Jaminan Kerja A';
-        else if (d.nominal === 150000) jenis = 'Investasi Jaminan Kerja B';
-        else if (d.nominal === 175000) jenis = 'Investasi Jaminan Kerja C';
-        else if (d.nominal === 200000) jenis = 'Investasi Jaminan Kerja D';
-        else if (d.nominal === 250000) jenis = 'Investasi Jaminan Kerja E';
+      // Sort double ke atas
+      allUploadRows.sort((a, b) => {
+        if (a.isDouble && !b.isDouble) return -1;
+        if (!a.isDouble && b.isDouble) return 1;
+        return 0;
+      });
 
-        const rowStyle = d.isDouble ? 'background: #fef2f2; opacity: 0.8;' : '';
-        const doubleBadge = d.isDouble ? ' <span class="badge out" style="padding:2px 6px; font-size:0.7rem; margin-left:8px;">Double</span>' : '';
-
-        return `<tr style="${rowStyle}"><td>${d.dateVal}</td><td>${d.nama || '-'}${doubleBadge}</td><td>${jenis}</td><td style="font-weight:600; color:var(--primary);">${fmt(d.nominal)}</td></tr>`;
-      }).join('');
+      _uploadData = allUploadRows;
+      renderPreviewUpdate();
 
       let msg = 'File dibaca: ' + _uploadData.length + ' baris.';
-      if (doubleCount > 0) msg += ` Ditemukan ${doubleCount} data double (akan dilewati).`;
+      if (doubleCount > 0) msg += ` Ditemukan ${doubleCount} data yang sudah ada di sistem.`;
       toast(msg, doubleCount > 0 ? 'info' : 'success');
     } catch (err) { toast('Gagal membaca file Excel', 'error'); console.error(err); }
   };
   reader.readAsArrayBuffer(file);
+}
+
+window.deleteUpdateRow = function (id) {
+  _uploadData = _uploadData.filter(d => d.id !== id);
+  renderPreviewUpdate();
+};
+
+window.keepUpdateRow = function (id) {
+  const row = _uploadData.find(d => d.id === id);
+  if (row) {
+    row.forceKeep = true;
+  }
+  renderPreviewUpdate();
+};
+
+function renderPreviewUpdate() {
+  const preview = document.getElementById('previewSection');
+  preview.classList.remove('hidden');
+  document.getElementById('previewCount').textContent = _uploadData.length;
+  document.querySelector('#previewTable tbody').innerHTML = _uploadData.map((d, i) => {
+    let jenis = 'Lainnya';
+    if (d.nominal === 50000 || d.nominal === 100000) jenis = 'Investasi Jaminan Kerja A';
+    else if (d.nominal === 150000) jenis = 'Investasi Jaminan Kerja B';
+    else if (d.nominal === 175000) jenis = 'Investasi Jaminan Kerja C';
+    else if (d.nominal === 200000) jenis = 'Investasi Jaminan Kerja D';
+    else if (d.nominal === 250000) jenis = 'Investasi Jaminan Kerja E';
+
+    const isDouble = d.isDouble && !d.forceKeep;
+    const rowStyle = isDouble ? 'background: #fef2f2;' : '';
+    
+    let badge = '';
+    if (isDouble) {
+      badge = ' <span class="badge out" style="padding:2px 6px; font-size:0.7rem; margin-left:8px;">Sudah Ada</span>';
+    } else if (d.forceKeep) {
+      badge = ' <span class="badge" style="padding:2px 6px; font-size:0.7rem; margin-left:8px; background:#10b981; color:#fff;">Tetap Diupload</span>';
+    }
+
+    let actionBtn = '';
+    if (isDouble) {
+      actionBtn = `
+        <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem; color: #10b981; border-color: #10b981; margin-right: 4px;" onclick="keepUpdateRow(${d.id})"><i class="fas fa-check"></i> Tetap Upload</button>
+        <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem; color: #ef4444; border-color: #ef4444;" onclick="deleteUpdateRow(${d.id})"><i class="fas fa-trash"></i> Hapus</button>
+      `;
+    } else {
+      actionBtn = `<button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem; color: #ef4444; border-color: #ef4444;" onclick="deleteUpdateRow(${d.id})"><i class="fas fa-trash"></i> Hapus</button>`;
+    }
+
+    return `<tr style="${rowStyle}"><td>${d.dateVal}</td><td>${d.nama || '-'}${badge}</td><td>${jenis}</td><td style="font-weight:600; color:var(--primary);">${fmt(d.nominal)}</td><td>${actionBtn}</td></tr>`;
+  }).join('');
 }
 
 async function sendDataToSheet(dataArray) {
@@ -3725,7 +3917,14 @@ async function sendDataToSheet(dataArray) {
 
 async function mergeData() {
   if (!_uploadData || !_uploadData.length) { toast('Tidak ada data untuk digabungkan', 'error'); return; }
-  const payload = _uploadData.filter(d => !d.isDouble).map((d, i) => {
+
+  const hasUnresolvedDouble = _uploadData.some(d => d.isDouble && !d.forceKeep);
+  if (hasUnresolvedDouble) {
+    toast('Masih ada transaksi yang sudah ada! Harap pilih "Tetap Upload" atau "Hapus" sebelum menyimpan.', 'error');
+    return;
+  }
+
+  const payload = _uploadData.map((d, i) => {
     let dateVal = d.dateVal;
     if (dateVal === '-') dateVal = new Date().toLocaleDateString('id-ID');
 
@@ -3753,8 +3952,17 @@ async function mergeData() {
     toast('Semua data sudah ada atau tidak valid.', 'error');
     return;
   }
+
+  const btnMerge = document.getElementById('btnMerge');
+  btnMerge.disabled = true;
+  btnMerge.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
   const success = await sendDataToSheet(payload);
   if (success) setTimeout(() => { location.reload(); }, 1500);
+  else {
+    btnMerge.disabled = false;
+    btnMerge.innerHTML = '<i class="fas fa-save"></i> Simpan ke Spreadsheet';
+  }
 }
 
 function initTarikExcelUpload() {
@@ -4111,6 +4319,20 @@ document.addEventListener('click', e => {
     }
     renderAnomaliTable();
   }
+
+  // Sorting untuk Tabel Transaksi
+  const thTx = e.target.closest('.sortable');
+  if (thTx) {
+    const col = parseInt(thTx.dataset.col);
+    if (txSort.col === col) {
+      txSort.asc = !txSort.asc;
+    } else {
+      txSort.col = col;
+      txSort.asc = true;
+    }
+    txPage = 1;
+    renderTxTable();
+  }
 });
 function exportAnomaliData() {
   const q = (document.getElementById('anomaliSearch')?.value || '').toLowerCase().trim();
@@ -4140,8 +4362,12 @@ function exportAnomaliData() {
     if (s) pass = pass && a.status === s;
 
     // 2.5 System Status Filter (Checkboxes)
-    if (checkedStatuses.length > 0) {
-      pass = pass && checkedStatuses.includes(a.systemStatus);
+    const isKoreksi = (a.status === 'SALAH INPUT' || (a.originalName && a.originalName !== a.name));
+    
+    if (s === 'SALAH INPUT') {
+      // Bypass filter checkbox sistem jika user secara eksplisit memfilter "Koreksi"
+    } else if (checkedStatuses.length > 0) {
+      pass = pass && (checkedStatuses.includes(a.systemStatus) || isKoreksi);
     } else {
       pass = false;
     }
@@ -4202,7 +4428,8 @@ function exportAnomaliData() {
   XLSX.utils.book_append_sheet(wb, ws, "Data Transaksi Meragukan");
 
   let statusSuffix = s ? `_${s.replace(/\s+/g, '_')}` : "_Semua_Status";
-  const filename = `Data_Transaksi_Meragukan${statusSuffix}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  const filename = `Data_Transaksi_Meragukan${statusSuffix}_${new Date().toISOString
+    ().split('T')[0]}.xlsx`;
 
   XLSX.writeFile(wb, filename);
   toast('Data transaksi meragukan berhasil didownload', 'success');
@@ -4338,56 +4565,3 @@ document.querySelectorAll('.sys-status-chk').forEach(chk => {
     renderAnomaliTable();
   });
 });
-
-window.exportDoubleDeposits = function() {
-  const monthlyCounts = {};
-  
-  allData.filter(d => d.type === 'Tabungan' && d.date).forEach(d => {
-    const id = getEmpId(d);
-    const monthYear = d.date.getFullYear() + '-' + String(d.date.getMonth() + 1).padStart(2, '0');
-    const key = `${id}_${monthYear}`;
-    
-    if (!monthlyCounts[key]) {
-      monthlyCounts[key] = {
-        name: d.name,
-        nik: d.nik,
-        monthYear: `${monthNames[d.date.getMonth()]} ${d.date.getFullYear()}`,
-        count: 0,
-        totalNominal: 0,
-        txs: []
-      };
-    }
-    monthlyCounts[key].count++;
-    monthlyCounts[key].totalNominal += d.nominal;
-    monthlyCounts[key].txs.push(d);
-  });
-  
-  const doubleDeposits = Object.values(monthlyCounts).filter(item => item.count > 1);
-  
-  if (doubleDeposits.length === 0) {
-    toast('Tidak ditemukan data setoran ganda.', 'info');
-    return;
-  }
-  
-  const exportData = [];
-  let no = 1;
-  doubleDeposits.forEach(item => {
-    item.txs.forEach((tx, idx) => {
-      exportData.push({
-        No: idx === 0 ? no++ : '',
-        Bulan: item.monthYear,
-        Karyawan: tx.name,
-        NIK: tx.nik || '-',
-        'Tanggal Transaksi': tx.dateStr || fmtDate(tx.date),
-        'Nominal Setoran': tx.nominal,
-        'Total Setoran Bulan Ini': idx === 0 ? item.totalNominal : ''
-      });
-    });
-  });
-  
-  const ws = XLSX.utils.json_to_sheet(exportData);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Setoran Ganda");
-  XLSX.writeFile(wb, `Rekap_Setoran_Ganda_${new Date().toISOString().split('T')[0]}.xlsx`);
-  toast(`Berhasil mengekspor ${doubleDeposits.length} kasus setoran ganda`, 'success');
-};

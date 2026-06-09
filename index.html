@@ -476,14 +476,12 @@
         <option value="">Semua Tipe</option>
         <option value="Tabungan">Tabungan</option>
         <option value="Penarikan">Penarikan</option>
+        <option value="Setoran Ganda">Setoran Ganda</option>
       </select>
 
       <div style="display: flex; gap: 8px; margin-left: auto;">
         <button id="btnClearTxFilter" class="btn btn-outline" title="Bersihkan Filter" style="padding: 6px 12px; font-size: 0.85rem; border-color: #f87171; color: #ef4444; border-radius: 6px; background: #fef2f2;">
           <i class="fas fa-times"></i> Clear
-        </button>
-        <button id="btnExportDoubleDeposits" class="btn btn-outline" style="padding: 6px 16px; font-size: 0.85rem; border-color: #f59e0b; color: #d97706; border-radius: 6px;">
-          <i class="fas fa-copy"></i> Setoran Ganda
         </button>
         <button id="btnExportTransaksi" class="btn btn-outline" style="padding: 6px 16px; font-size: 0.85rem; border-color: #cbd5e1; color: #475569; border-radius: 6px;">
           <i class="fas fa-download" style="color: #10b981;"></i> Download Data
@@ -510,19 +508,20 @@
       </div>
     </div>
 
-    <div id="txTableSummary"></div>
-    <div class="chart-card full-width"><div class="table-wrapper">
-      <table class="data-table" id="txTable"><thead><tr>
-        <th class="sortable" data-col="0">No <i class="fas fa-sort"></i></th>
-        <th class="sortable" data-col="1">Tanggal <i class="fas fa-sort"></i></th>
-        <th class="sortable" data-col="2">Karyawan <i class="fas fa-sort"></i></th>
-        <th>Jenis Potongan</th>
-        <th class="sortable" data-col="4">Nominal <i class="fas fa-sort"></i></th>
-        <th>Tipe</th>
-        <th>Aksi</th>
-      </tr></thead><tbody></tbody></table>
-    </div>
-    <div class="pagination" id="txPagination"></div>
+    <div id="txListContainer">
+      <div id="txTableSummary"></div>
+      <div class="chart-card full-width"><div class="table-wrapper">
+        <table class="data-table" id="txTable"><thead><tr>
+          <th class="sortable" data-col="0">No <i class="fas fa-sort"></i></th>
+          <th class="sortable" data-col="1">Tanggal <i class="fas fa-sort"></i></th>
+          <th class="sortable" data-col="2">Karyawan <i class="fas fa-sort"></i></th>
+          <th>Jenis Potongan</th>
+          <th class="sortable" data-col="4">Nominal <i class="fas fa-sort"></i></th>
+          <th>Tipe</th>
+          <th>Aksi</th>
+        </tr></thead><tbody></tbody></table>
+      </div></div>
+      <div class="pagination" id="txPagination"></div>
     </div>
   </section>
 
@@ -766,7 +765,7 @@
         <div id="previewSection" class="hidden" style="margin-top:16px;">
           <h4>Preview Data (<span id="previewCount">0</span> baris)</h4>
           <div class="table-wrapper"><table class="data-table" id="previewTable"><thead><tr>
-            <th>Bulan/Tahun</th><th>Karyawan</th><th>Jenis</th><th>Nominal</th>
+            <th>Bulan/Tahun</th><th>Karyawan</th><th>Jenis</th><th>Nominal</th><th>Aksi</th>
           </tr></thead><tbody></tbody></table></div>
           <div class="btn-group" style="margin-top:12px;">
             <button class="btn btn-primary" id="btnMerge"><i class="fas fa-save"></i> Simpan ke Spreadsheet</button>
@@ -886,28 +885,38 @@
     </div>
     <div class="modal-body">
       <input type="hidden" id="editTxRowNo">
-      <div style="display: grid; grid-template-columns: 1fr; gap: 16px;">
+      
+      <div id="editTxActionOptions" style="display: flex; gap: 16px; margin-bottom: 20px; padding: 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+        <label style="font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px;">
+          <input type="radio" name="editTxAction" value="koreksi" checked> Koreksi Data
+        </label>
+        <label style="font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; color: #ef4444;">
+          <input type="radio" name="editTxAction" value="hapus"> Hapus / Batalkan (Abaikan Data)
+        </label>
+      </div>
+
+      <div id="editTxFormFields" style="display: grid; grid-template-columns: 1fr; gap: 16px;">
         <div>
           <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Tanggal (Bulan/Tahun):</label>
           <input type="text" id="editTxDate" class="form-input" placeholder="Contoh: 15/04/2026">
         </div>
         <div style="position: relative;">
           <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Nama Karyawan:</label>
-          <input type="text" id="editTxName" class="form-input" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+          <input type="text" id="editTxName" class="form-input" autocomplete="off" placeholder="Ketik nama karyawan...">
           <div id="editTxNameResults" class="search-results" style="top: 100%; font-size: 0.9rem;"></div>
-        </div>
-        <div>
-          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Nominal:</label>
-          <input type="number" id="editTxNominal" class="form-input" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
         </div>
         <div style="position: relative;">
           <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">NIK:</label>
-          <input type="text" id="editTxNik" class="form-input" readonly style="background-color: #f1f5f9; cursor: not-allowed;">
+          <input type="text" id="editTxNik" class="form-input" autocomplete="off" placeholder="Ketik NIK karyawan...">
           <div id="editTxNikResults" class="search-results" style="top: 100%; font-size: 0.9rem;"></div>
         </div>
         <div>
+          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Nominal:</label>
+          <input type="number" id="editTxNominal" class="form-input">
+        </div>
+        <div>
           <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Tipe:</label>
-          <select id="editTxType" class="form-input" disabled style="background-color: #f1f5f9; cursor: not-allowed;">
+          <select id="editTxType" class="form-input">
             <option value="Tabungan">Tabungan</option>
             <option value="Penarikan">Penarikan</option>
           </select>
@@ -916,10 +925,10 @@
           <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Catatan Perubahan:</label>
           <textarea id="editTxNotes" class="form-input" placeholder="Alasan perubahan data... (opsional)" style="height: 60px; resize: none; background-color: var(--surface);"></textarea>
         </div>
-        <div>
-          <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #64748b;">Password Konfirmasi:</label>
-          <input type="password" id="editTxPassword" class="form-input" placeholder="Masukkan password admin...">
-        </div>
+      </div>
+      <div style="margin-top: 16px;">
+        <label class="form-label" style="display:block; margin-bottom:5px; font-weight: 600; color: #ef4444;"><i class="fas fa-lock"></i> Password Konfirmasi Admin:</label>
+        <input type="password" id="editTxPassword" class="form-input" placeholder="Masukkan password admin..." style="border-color: #fca5a5;">
       </div>
     </div>
     <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px; background: #f8fafc;">

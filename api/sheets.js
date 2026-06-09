@@ -210,7 +210,7 @@ module.exports = async (req, res) => {
 
       // 3. Update Specific Row
       if (type === 'updateRow' && updateData) {
-        const { rowNo, date, name, nominal, nik, type: txType, notes } = updateData;
+        const { rowNo, date, name, nominal, nik, type: txType, notes, isDeleted } = updateData;
         console.log('--- START UPDATE ROW ---');
         
         // Verifikasi Password Admin lagi untuk keamanan
@@ -245,12 +245,13 @@ module.exports = async (req, res) => {
           // A. Update Main Sheet
           // Prefix date with ' to force it as text and prevent Google Sheets auto-formatting
           const forcedDate = `'${date}`;
+          const statusMarker = isDeleted ? "DIHAPUS" : "DIEDIT";
           const updateRes = await sheets.spreadsheets.values.update({
             spreadsheetId: sheetId.trim(),
             range: `'${sheetName}'!B${rowNo}:H${rowNo}`,
             valueInputOption: 'USER_ENTERED',
             requestBody: {
-              values: [[forcedDate, name, saveNominal, nik, txType, "DIEDIT", notes || "-"]]
+              values: [[forcedDate, name, saveNominal, nik, txType, statusMarker, notes || "-"]]
             }
           });
 
@@ -426,6 +427,7 @@ module.exports = async (req, res) => {
           keterangan: rawKet,
           jenisPotongan: jenisPotongan,
           isEdited: row[6] === 'DIEDIT',
+          isDeleted: row[6] === 'DIHAPUS' || row[6] === 'DIABAIKAN',
           notes: row[7] || ''
         });
       }
