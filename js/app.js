@@ -1391,7 +1391,7 @@ function renderAnomaliTable() {
     if (filterStatus === 'SALAH INPUT') {
       // Bypass filter checkbox sistem jika user secara eksplisit memfilter "Koreksi"
     } else if (checkedStatuses.length > 0) {
-      pass = pass && (checkedStatuses.includes(a.systemStatus) || isKoreksi);
+      pass = pass && checkedStatuses.includes(a.systemStatus);
     } else {
       const isVisibleByDefault = (a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL' || a.status === 'TERBUKTI' || isKoreksi);
       pass = pass && isVisibleByDefault;
@@ -1458,6 +1458,7 @@ function renderAnomaliTable() {
     } else {
       sumContainer.innerHTML = `
         <div class="summary-card"><div class="card-icon red"><i class="fas fa-exclamation-triangle"></i></div><div class="card-label">TOTAL KASUS</div><div class="card-value">${totalAnomali}</div><div class="card-sub">Data sesuai filter</div></div>
+        <div class="summary-card"><div class="card-icon indigo"><i class="fas fa-coins"></i></div><div class="card-label">Total Over-Withdraw</div><div class="card-value" style="color: #6366f1;">${fmt(totalInitial)}</div><div class="card-sub">Total defisit awal</div></div>
         <div class="summary-card"><div class="card-icon green"><i class="fas fa-hand-holding-usd"></i></div><div class="card-label">Total Hutang Terbayar</div><div class="card-value" style="color: #10b981;">${fmt(totalRecovered)}</div><div class="card-sub">Total pemulihan dana</div></div>
         <div class="summary-card"><div class="card-icon orange"><i class="fas fa-exclamation-circle"></i></div><div class="card-label">Potensi Selisih</div><div class="card-value" style="color: #f59e0b;">${fmt(potensiKerugian)}</div><div class="card-sub">Status: Menunggu Review</div></div>
         <div class="summary-card"><div class="card-icon red"><i class="fas fa-times-circle"></i></div><div class="card-label">Selisih Terbukti</div><div class="card-value" style="color: #ef4444;">${fmt(kerugianTerbukti)}</div><div class="card-sub">Total Defisit Terkonfirmasi</div></div>
@@ -4359,16 +4360,24 @@ function exportAnomaliData() {
     if (q) pass = pass && (variations.some(v => v.toLowerCase().includes(q)) || (a.nik && a.nik.toLowerCase().includes(q)));
     
     // 2. Status filter (Manual Review)
-    if (s) pass = pass && a.status === s;
+    if (s) { // s is filterStatus
+      if (s === 'SALAH INPUT') {
+        pass = pass && (a.status === 'SALAH INPUT' || (a.originalName && a.originalName !== a.name));
+      } else {
+        pass = pass && a.status === s;
+      }
+    }
 
     // 2.5 System Status Filter (Checkboxes)
     const isKoreksi = (a.status === 'SALAH INPUT' || (a.originalName && a.originalName !== a.name));
     
     if (s === 'SALAH INPUT') {
-      // Bypass filter checkbox sistem jika user secara eksplisit memfilter "Koreksi"
+      // Bypass checkbox filter if dropdown is set to 'SALAH INPUT'
     } else if (checkedStatuses.length > 0) {
-      pass = pass && (checkedStatuses.includes(a.systemStatus) || isKoreksi);
+      pass = pass && checkedStatuses.includes(a.systemStatus);
     } else {
+      // If no checkboxes are checked and not filtering for 'SALAH INPUT', export nothing.
+      // This is intentional for export to avoid exporting the whole list by accident.
       pass = false;
     }
 
