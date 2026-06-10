@@ -2661,12 +2661,38 @@ function initSearch() {
           return dId === id || empVariations.has(d.name);
         });
         
-        let lifeIn = 0;
-        allTxs.forEach(d => {
-          if (!d.isDeleted && d.type === 'Tabungan') lifeIn += d.nominal;
-        });
-        
-        const lifeBrk = calculateWithdrawalBreakdown(allTxs);
+        let currentBalance = 0, accPrincipal = 0;
+        if (allTxs.length > 0) {
+          const sortedTxs = [...allTxs].filter(d => d.date).sort((a, b) => a.date - b.date);
+          const monthlyRate = 0.03 / 12;
+          let lastInterestMonth = null;
+          
+          sortedTxs.forEach(tx => {
+            if (tx.isDeleted) return;
+            let pending = 0;
+            const txMonth = tx.date ? (tx.date.getFullYear() + '-' + tx.date.getMonth()) : null;
+
+            if (tx.type === 'Tabungan') {
+              if (txMonth && lastInterestMonth !== txMonth) {
+                if (currentBalance > 0) pending = currentBalance * monthlyRate;
+                lastInterestMonth = txMonth;
+              }
+              currentBalance += pending;
+              currentBalance += tx.nominal;
+              accPrincipal += tx.nominal;
+            } else {
+              const amountCovered = Math.max(0, Math.min(tx.nominal, currentBalance));
+              if (amountCovered > 0) {
+                const fromModal = Math.min(amountCovered, Math.max(0, accPrincipal));
+                accPrincipal -= fromModal;
+              } else {
+                accPrincipal -= tx.nominal;
+              }
+              currentBalance -= tx.nominal;
+            }
+          });
+        }
+
         let totalPaidDebt = 0;
         const empSheetRows = new Set(allTxs.map(t => t.sheetRow));
         allAnomalies.forEach(a => {
@@ -2674,15 +2700,16 @@ function initSearch() {
             totalPaidDebt += (a.initialDebt - a.remainingDebt);
           }
         });
+        totalPaidDebt = Math.round(totalPaidDebt);
         
-        const sisaSetoran = Math.max(0, Math.round(lifeIn - lifeBrk.modal - totalPaidDebt));
+        const sisaSetoran = Math.max(0, Math.round(accPrincipal - totalPaidDebt));
 
         return {
           No: i + 1,
           Nama: e.name,
           NIK: e.nik || '-',
           'Sisa Setoran': sisaSetoran,
-          'Total Saldo Akhir': Math.round(status.balance),
+          'Total Saldo Akhir': Math.round(currentBalance),
           'Status Aktif': status.isActive ? 'Aktif' : 'Tidak Aktif',
           'Transaksi Terakhir': status.lastDepositDate ? fmtDate(status.lastDepositDate) : '-'
         };
@@ -2935,9 +2962,6 @@ function showEmployee(name, nik = '') {
     </div>
   `;
 
-  // Hitung pecahan penarikan dari seluruh riwayat (kumulatif)
-  const lifeBrk = calculateWithdrawalBreakdown(allTxs);
-
   const cards = [];
   const uniqueMonths = new Set(allTxs.filter(tx => tx.date).map(tx => tx.date.getFullYear() + '-' + tx.date.getMonth()));
   const avgContribution = uniqueMonths.size > 0 ? lifeIn / uniqueMonths.size : 0;
@@ -2957,7 +2981,7 @@ function showEmployee(name, nik = '') {
   });
   totalPaidDebt = Math.round(totalPaidDebt);
 
-  const sisaSetoran = lifeIn - lifeBrk.modal - totalPaidDebt;
+  const sisaSetoran = Math.max(0, Math.round(accPrincipal - totalPaidDebt));
   let sisaSetoranSub = 'Setoran murni tersisa';
   if (totalPaidDebt > 0) {
     sisaSetoranSub += `<div style="margin-top:4px;">Untuk bayar selisih: <span style="font-weight:600; color:#ef4444;">${fmt(totalPaidDebt)}</span></div>`;
@@ -3019,6 +3043,21 @@ function showEmployee(name, nik = '') {
     ]
   });
 
+  // Calculate specific metrics for the pie chart
+  let pieSalah = 0;
+  let pieSuspicious = 0;
+  allAnomalies.forEach(a => {
+    if (empSheetRows.has(a.originalNo)) {
+      if (a.status === 'TERBUKTI' || a.status === 'Verified') {
+        pieSalah += a.initialDebt;
+      } else if (a.status === 'MENUNGGU REVIEW' || a.systemStatus === 'MENCURIGAKAN' || a.systemStatus === 'DICICIL') {
+        pieSuspicious += a.initialDebt;
+      } else {
+        pieSalah += a.initialDebt;
+      }
+    }
+  });
+
   // Pie chart
   const ctx2 = document.getElementById('empPieChart');
   if (charts.empPie) charts.empPie.dispose();
@@ -3028,11 +3067,11 @@ function showEmployee(name, nik = '') {
     { value: lifeIn, name: 'Total Setoran (Modal)', itemStyle: { color: '#4f46e5' } },
     { value: exactBunga, name: 'Total Bunga (Return)', itemStyle: { color: '#f59e0b' } }
   ];
-  if (lifeBrk.salah > 0) {
-    pieData.push({ value: lifeBrk.salah, name: 'Selisih (Defisit)', itemStyle: { color: '#ef4444' } });
+  if (pieSalah > 0) {
+    pieData.push({ value: pieSalah, name: 'Selisih (Defisit)', itemStyle: { color: '#ef4444' } });
   }
-  if (lifeBrk.suspicious > 0) {
-    pieData.push({ value: lifeBrk.suspicious, name: 'Transaksi Meragukan', itemStyle: { color: '#8b5cf6' } });
+  if (pieSuspicious > 0) {
+    pieData.push({ value: pieSuspicious, name: 'Transaksi Meragukan', itemStyle: { color: '#8b5cf6' } });
   }
 
   charts.empPie.setOption({
