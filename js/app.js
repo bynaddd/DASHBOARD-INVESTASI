@@ -2626,14 +2626,63 @@ function initSearch() {
         toast('Tidak ada data karyawan', 'error');
         return;
       }
-      const exportData = allEmployees.map((e, i) => {
+      
+      const q = (document.getElementById('employeeSearch')?.value || '').toLowerCase().trim();
+      const statusFilter = document.getElementById('empStatusFilter');
+      const statusMode = statusFilter ? statusFilter.value : 'all';
+
+      const filteredEmployees = allEmployees.filter(e => {
+        let pass = true;
+        if (q) {
+          pass = pass && (e.variations.some(v => v.toLowerCase().includes(q)) || (e.nik && e.nik.toLowerCase().includes(q)));
+        }
+        
+        if (statusMode !== 'all') {
+          const status = allEmployeesStatus[getEmpId(e)] || { isActive: false };
+          if (statusMode === 'on') pass = pass && status.isActive;
+          if (statusMode === 'off') pass = pass && !status.isActive;
+        }
+
+        return pass;
+      });
+
+      if (filteredEmployees.length === 0) {
+        toast('Tidak ada data karyawan yang sesuai dengan filter', 'error');
+        return;
+      }
+
+      const exportData = filteredEmployees.map((e, i) => {
         const id = getEmpId(e);
         const status = allEmployeesStatus[id] || { balance: 0, isActive: false, lastDepositDate: null };
+        
+        const empVariations = allAliasesMap[id] || new Set([e.name]);
+        const allTxs = allData.filter(d => {
+          const dId = getEmpId(d);
+          return dId === id || empVariations.has(d.name);
+        });
+        
+        let lifeIn = 0;
+        allTxs.forEach(d => {
+          if (!d.isDeleted && d.type === 'Tabungan') lifeIn += d.nominal;
+        });
+        
+        const lifeBrk = calculateWithdrawalBreakdown(allTxs);
+        let totalPaidDebt = 0;
+        const empSheetRows = new Set(allTxs.map(t => t.sheetRow));
+        allAnomalies.forEach(a => {
+          if (empSheetRows.has(a.originalNo)) {
+            totalPaidDebt += (a.initialDebt - a.remainingDebt);
+          }
+        });
+        
+        const sisaSetoran = Math.max(0, Math.round(lifeIn - lifeBrk.modal - totalPaidDebt));
+
         return {
           No: i + 1,
           Nama: e.name,
           NIK: e.nik || '-',
-          'Total Saldo Akhir': status.balance,
+          'Sisa Setoran': sisaSetoran,
+          'Total Saldo Akhir': Math.round(status.balance),
           'Status Aktif': status.isActive ? 'Aktif' : 'Tidak Aktif',
           'Transaksi Terakhir': status.lastDepositDate ? fmtDate(status.lastDepositDate) : '-'
         };
@@ -2641,8 +2690,8 @@ function initSearch() {
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Daftar Saldo");
-      XLSX.writeFile(wb, `Data_Saldo_Semua_Karyawan_${new Date().toISOString().split('T')[0]}.xlsx`);
-      toast('Data saldo semua karyawan berhasil didownload', 'success');
+      XLSX.writeFile(wb, `Data_Saldo_Karyawan_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast('Data saldo karyawan berhasil didownload', 'success');
     });
   }
 
