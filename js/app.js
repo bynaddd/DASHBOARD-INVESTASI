@@ -1563,7 +1563,7 @@ function renderAnomaliTable() {
           ${reviewBtn}
           <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="goToEmployee('${escName}', '${empNik}')" title="Detail"><i class="fas fa-search"></i></button>
         </td>
-        <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;" title="${noteContent}">${noteContent}</td>
+        <td style="min-width: 200px; max-width: 300px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.85rem;" title="${noteContent}">${noteContent}</td>
         <td style="font-size: 0.8rem; color: #64748b;">${a.reviewer}</td>
       </tr>`;
     }).join('');
