@@ -492,19 +492,6 @@ function initDashboard(isFirst = true) {
     const btnCloseModal = document.getElementById('btnCloseModal');
     const btnCancelReview = document.getElementById('btnCancelReview');
     const btnSaveReview = document.getElementById('btnSaveReview');
-    const reviewNotesSelect = document.getElementById('reviewNotesSelect');
-    const reviewNotesArea = document.getElementById('reviewNotes');
-
-    if (reviewNotesSelect && reviewNotesArea) {
-      reviewNotesSelect.addEventListener('change', (e) => {
-        if (e.target.value === 'Lainnya') {
-          reviewNotesArea.classList.remove('hidden');
-        } else {
-          reviewNotesArea.classList.add('hidden');
-        }
-      });
-    }
-
     if (btnCloseModal) btnCloseModal.addEventListener('click', closeReviewModal);
     if (btnCancelReview) btnCancelReview.addEventListener('click', closeReviewModal);
     if (btnSaveReview) btnSaveReview.addEventListener('click', saveReview);
@@ -515,31 +502,12 @@ function initDashboard(isFirst = true) {
       opt.addEventListener('change', (e) => {
         const cf = document.getElementById('correctionFields');
         const pg = document.getElementById('reviewPasswordGroup');
-        const notesSelect = document.getElementById('reviewNotesSelect');
-        const notesArea = document.getElementById('reviewNotes');
-
         if (e.target.value === 'SALAH INPUT') {
           cf.classList.remove('hidden');
           pg.classList.remove('hidden');
         } else {
           cf.classList.add('hidden');
           pg.classList.add('hidden');
-        }
-
-        if (e.target.value === 'TERBUKTI') {
-          if (notesSelect) notesSelect.classList.remove('hidden');
-          if (notesArea) notesArea.placeholder = "Ketik alasan lainnya...";
-          if (notesSelect && notesSelect.value === 'Lainnya') {
-            if (notesArea) notesArea.classList.remove('hidden');
-          } else {
-            if (notesArea) notesArea.classList.add('hidden');
-          }
-        } else {
-          if (notesSelect) notesSelect.classList.add('hidden');
-          if (notesArea) {
-            notesArea.placeholder = "Tambahkan catatan hasil investigasi atau alasan koreksi...";
-            notesArea.classList.remove('hidden');
-          }
         }
       });
     });
@@ -694,8 +662,20 @@ function renderSummary() {
     lastMonthOut = 0;
   }
 
+  // Mensejajarkan nilai Modal Pokok Dashboard dengan akumulasi Sisa Setoran hasil perhitungan Per Karyawan 
   let total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
-  let totalPrincipal = totalIn - totalOut;
+  
+  let totalPrincipal = 0;
+  if (!isFiltered && typeof allEmployeesStatus !== 'undefined') {
+    // Ambil semua dari Sisa Setoran karyawan (sama dengan logika export)
+    Object.values(allEmployeesStatus).forEach(emp => {
+      // Pastikan mengikuti batasan nilai sisaSetoran seperti di export (tidak boleh minus)
+      totalPrincipal += Math.max(0, emp.sisaSetoran || 0); 
+    });
+  } else {
+    // Fallback jika memuat filter date tertentu
+    totalPrincipal = totalIn - totalOut;
+  }
 
   if (isFiltered) {
      const range = document.querySelector('#dashboardTimeFilter button.active').dataset.range;
@@ -724,24 +704,33 @@ function renderSummary() {
        
        if (d.isDeleted) return;
        const id = getEmpId(d);
-       if (!emps[id]) emps[id] = { balance: 0, lastInterestMonth: null };
+       if (!emps[id]) emps[id] = { balance: 0, principal: 0, lastInterestMonth: null };
        
+       const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
+       let interest = 0;
+       if (txMonth && emps[id].lastInterestMonth !== txMonth) {
+         if (emps[id].lastInterestMonth) {
+           const [ly, lm] = emps[id].lastInterestMonth.split('-').map(Number);
+           const [cy, cm] = txMonth.split('-').map(Number);
+           const diffMonths = (cy - ly) * 12 + (cm - lm);
+           if (diffMonths > 0 && emps[id].balance > 0) interest = emps[id].balance * monthlyRate * diffMonths;
+         }
+         emps[id].lastInterestMonth = txMonth;
+       }
+
        if (d.type === 'Tabungan') {
          cumIn += d.nominal;
-         const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
-         let interest = 0;
-         if (txMonth && emps[id].lastInterestMonth !== txMonth) {
-           if (emps[id].balance > 0) interest = emps[id].balance * monthlyRate;
-           emps[id].lastInterestMonth = txMonth;
-         }
          emps[id].balance += interest + d.nominal;
+         emps[id].principal += d.nominal;
        } else { 
          cumOut += d.nominal;
+         emps[id].balance += interest;
          emps[id].balance -= d.nominal; 
+         emps[id].principal -= d.nominal;
        }
      });
-     total = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
-     totalPrincipal = cumIn - cumOut;
+     total = Object.values(emps).reduce((sum, e) => sum + Math.max(0, e.balance), 0);
+     totalPrincipal = Object.values(emps).reduce((sum, e) => sum + Math.max(0, e.principal), 0);
   }
 
   const netFlow = monthIn - monthOut;
@@ -1193,11 +1182,20 @@ function calculateAnomalies() {
 
     txs.forEach(t => {
       const txMonth = t.date ? (t.date.getFullYear() + '-' + t.date.getMonth()) : null;
-      if (t.type === 'Tabungan') {
-        if (txMonth && lastInterestMonth !== txMonth) {
-          if (balance > 0) pendingInterest = balance * monthlyRate;
-          lastInterestMonth = txMonth;
+      
+      // Bunga harus dihitung setiap kali ada transaksi beda bulan (baik Tabungan maupun Penarikan)
+      if (txMonth && lastInterestMonth !== txMonth) {
+        if (lastInterestMonth) {
+          const [ly, lm] = lastInterestMonth.split('-').map(Number);
+          const [cy, cm] = txMonth.split('-').map(Number);
+          const diffMonths = (cy - ly) * 12 + (cm - lm);
+          
+          // Berikan bunga dikalikan jumlah bulan yang terlewat
+          if (diffMonths > 0 && balance > 0) {
+             pendingInterest = balance * monthlyRate * diffMonths;
+          }
         }
+        lastInterestMonth = txMonth;
       }
 
       const balanceBefore = balance;
@@ -1229,6 +1227,7 @@ function calculateAnomalies() {
 
       } else {
         // Penarikan
+        balance += pendingInterest; // Bunga tetap cair sebelum ditarik
         balance -= t.nominal;
         pendingInterest = 0;
         lifeOut += t.nominal;
@@ -1334,11 +1333,20 @@ function calculateAnomalies() {
       const diffMonths = (refDate.getFullYear() - lastDepositDate.getFullYear()) * 12 + (refDate.getMonth() - lastDepositDate.getMonth());
       isActive = diffMonths < 3;
     }
-    const sisaSetoran = lifeIn - lifeOut;
+    
+    // Kalkulasi Hutang Lunas (diselaraskan dengan fungsi export karyawan)
+    let totalPaidDebt = 0;
+    empActiveAnomalies.forEach(a => {
+        totalPaidDebt += (a.initialDebt - a.remainingDebt);
+    });
+    
+    // Set Sisa Setoran agar persis dengan file Export (Math.max(0, Modal - Hutang Lunas))
+    const sisaSetoran = Math.max(0, Math.round(lifeIn - lifeOut));
+    
     emps[id] = { balance, isActive, lastDepositDate, sisaSetoran };
   });
 
-  globalTotalSaldo = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
+  globalTotalSaldo = Object.values(emps).reduce((sum, e) => sum + Math.max(0, e.balance), 0);
   globalTotalActive = Object.values(emps).filter(e => e.isActive).length;
   allEmployeesStatus = emps;
 
@@ -1814,40 +1822,7 @@ window.openReviewModal = function (txKey) {
   const pwInput = document.getElementById('reviewPassword');
   if (pwInput) pwInput.value = '';
 
-  const notesSelect = document.getElementById('reviewNotesSelect');
-  const notesArea = document.getElementById('reviewNotes');
-  
-  if (notesSelect && notesArea) {
-    const predefinedOptions = Array.from(notesSelect.options).map(opt => opt.value);
-    if (anomali.notes && anomali.notes !== '-') {
-      if (predefinedOptions.includes(anomali.notes)) {
-        notesSelect.value = anomali.notes;
-        notesArea.value = '';
-      } else {
-        notesSelect.value = 'Lainnya';
-        notesArea.value = anomali.notes;
-      }
-    } else {
-      notesSelect.value = '';
-      notesArea.value = '';
-    }
-
-    if (currentStatus === 'TERBUKTI') {
-      notesSelect.classList.remove('hidden');
-      notesArea.placeholder = "Ketik alasan lainnya...";
-      if (notesSelect.value === 'Lainnya') {
-        notesArea.classList.remove('hidden');
-      } else {
-        notesArea.classList.add('hidden');
-      }
-    } else {
-      notesSelect.classList.add('hidden');
-      notesArea.placeholder = "Tambahkan catatan hasil investigasi atau alasan koreksi...";
-      notesArea.classList.remove('hidden');
-    }
-  } else if (notesArea) {
-    notesArea.value = anomali.notes === '-' ? '' : anomali.notes;
-  }
+  document.getElementById('reviewNotes').value = anomali.notes === '-' ? '' : anomali.notes;
 
   document.getElementById('modalReview').classList.remove('hidden');
 };
@@ -1860,15 +1835,7 @@ window.closeReviewModal = function () {
 async function saveReview() {
   if (!currentReviewTxKey) return;
   const status = document.querySelector('input[name="reviewStatus"]:checked')?.value || 'MENUNGGU REVIEW';
-  
-  const notesSelect = document.getElementById('reviewNotesSelect');
-  let notes = '';
-  if (status === 'TERBUKTI' && notesSelect && notesSelect.value && notesSelect.value !== 'Lainnya') {
-    notes = notesSelect.value;
-  } else {
-    notes = document.getElementById('reviewNotes').value.trim() || 'No notes added';
-  }
-  
+  const notes = document.getElementById('reviewNotes').value.trim() || 'No notes added';
   const reviewer = document.getElementById('reviewerEmail').value.trim() || 'anonymous@moneybox.com';
   const password = document.getElementById('reviewPassword').value;
 
@@ -2628,7 +2595,8 @@ function initSearch() {
   const renderList = (filteredEmps) => {
     listContainer.innerHTML = filteredEmps.map(e => {
       const initials = e.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
-      const status = allEmployeesStatus[getEmpId(e)] || { isActive: false };
+      const primaryId = window.nameToPrimaryId ? (window.nameToPrimaryId[e.name] || getEmpId(e)) : getEmpId(e);
+      const status = allEmployeesStatus[primaryId] || { isActive: false };
       const statusBadge = status.isActive ? '<span class="badge-status status-verified" style="font-size:0.6rem; padding:1px 4px;">AKTIF</span>' : '<span class="badge-status status-progress" style="font-size:0.6rem; padding:1px 4px;">OFF</span>';
       
       const aliases = e.variations.filter(v => v !== e.name);
@@ -2667,7 +2635,8 @@ function initSearch() {
       }
       
       if (statusMode !== 'all') {
-        const status = allEmployeesStatus[getEmpId(e)] || { isActive: false };
+        const primaryId = window.nameToPrimaryId ? (window.nameToPrimaryId[e.name] || getEmpId(e)) : getEmpId(e);
+        const status = allEmployeesStatus[primaryId] || { isActive: false };
         if (statusMode === 'on') pass = pass && status.isActive;
         if (statusMode === 'off') pass = pass && !status.isActive;
       }
@@ -2744,7 +2713,6 @@ function initSearch() {
             if (tx.isDeleted) return;
             let pending = 0;
             const txMonth = tx.date ? (tx.date.getFullYear() + '-' + tx.date.getMonth()) : null;
-
             if (tx.type === 'Tabungan') {
               if (txMonth && lastInterestMonth !== txMonth) {
                 if (currentBalance > 0) pending = currentBalance * monthlyRate;
