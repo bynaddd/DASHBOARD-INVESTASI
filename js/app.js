@@ -2328,7 +2328,7 @@ function renderTxTable() {
     const alertIcon = isSuspicious ? `<i class="fas fa-exclamation-triangle" style="color:#ef4444; margin-right:4px;" title="Transaksi Meragukan"></i>` : '';
     const ignoredIcon = isDeleted ? `<i class="fas fa-ban" style="color:#94a3b8; margin-right:4px;" title="Transaksi Diabaikan"></i>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
-    const canEdit = d.type === 'Penarikan' || (d.type === 'Tabungan' && d.isDoubleDeposit);
+    const canEdit = true; // Buka akses edit untuk semua transaksi (Setoran & Penarikan)
     const editBtn = (isAdmin && canEdit) ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-right: 4px;" onclick="openEditModal(${d.sheetRow}, '${escName}', ${d.nominal}, '${empNik}', '${d.type}', '${d.dateStr}', ${d.isDoubleDeposit ? 'true' : 'false'})"><i class="fas fa-pencil-alt"></i></button>` : '';
 
     const deletedBadge = isDeleted ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fee2e2; color: #ef4444; border: 1px solid #fecaca; border-radius: 4px; vertical-align: middle; text-decoration: none;" title="Data Diabaikan: ${d.notes || '-'}">DIABAIKAN / TIDAK DIHITUNG</span>` : '';
@@ -2455,19 +2455,18 @@ window.openEditModal = function(sheetRow, name, nominal, nik, type, dateStr, isD
   document.getElementById('editTxPassword').value = ''; 
   document.getElementById('editTxNotes').value = ''; 
   
-  // Kunci field jika yang diedit adalah setoran ganda
+  // Kunci field nominal dan tipe untuk semua jenis transaksi (Setoran dan Penarikan)
   const dateField = document.getElementById('editTxDate');
   const nominalField = document.getElementById('editTxNominal');
   const typeField = document.getElementById('editTxType');
   
+  nominalField.disabled = true;
+  typeField.disabled = true;
+
   if (isDouble) {
     dateField.disabled = true;
-    nominalField.disabled = true;
-    typeField.disabled = true;
   } else {
     dateField.disabled = false;
-    nominalField.disabled = false;
-    typeField.disabled = false;
   }
 
   // Set default action
@@ -3296,7 +3295,7 @@ function showEmployee(name, nik = '') {
   document.querySelector('#empTable tbody').innerHTML = tableData.map((row, idx) => {
     const editedBadge = (!row.isDeleted && row.isEdited) ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${row.notes || '-'}">DIEDIT</span>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
-    const canEdit = row.type === 'Penarikan' || (row.type === 'Tabungan' && row.isDoubleDeposit);
+    const canEdit = true; // Buka akses edit untuk semua transaksi (Setoran & Penarikan)
     const editBtn = (isAdmin && canEdit) ? `<button class="btn btn-outline" style="padding: 2px 8px; font-size: 0.7rem; color: #f59e0b; border-color: #f59e0b; margin-left: 4px;" onclick="openEditModal(${row.sheetRow}, '${row.name.replace(/'/g, "\\'")}', ${row.nominal}, '${row.nik || ''}', '${row.type}', '${row.dateStr}', ${row.isDoubleDeposit ? 'true' : 'false'})"><i class="fas fa-pencil-alt"></i></button>` : '';
 
     const rowColorStyle = row.isDeleted ? 'color: #94a3b8;' : (row.balance < 0 ? 'color: #ef4444;' : '');
