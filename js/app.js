@@ -367,6 +367,23 @@ async function fetchData() {
       }
     });
 
+    // Auto-fill missing NIKs based on existing records with the same name
+    const nameToNikMap = {};
+    allData.forEach(d => {
+      if (d.nik && d.nik !== '-' && d.name) {
+        nameToNikMap[d.name.toLowerCase()] = d.nik;
+      }
+    });
+
+    allData.forEach(d => {
+      if ((!d.nik || d.nik === '-') && d.name) {
+        const foundNik = nameToNikMap[d.name.toLowerCase()];
+        if (foundNik) {
+          d.nik = foundNik; // Gabungkan transaksi tanpa NIK ke NIK yang dominan
+        }
+      }
+    });
+
     // Normalisasi Nama dihapus agar semua variasi nama muncul di daftar
     allData.sort((a, b) => (a.date || 0) - (b.date || 0));
     globalFilteredData = [...allData];
@@ -1880,9 +1897,16 @@ async function saveReview() {
     correctNik = '';
   }
 
-  if (status === 'SALAH INPUT' && (!correctName || !correctNik)) {
-    toast('Silakan isi nama dan NIK koreksi', 'error');
+  if (status === 'SALAH INPUT' && !correctName) {
+    toast('Silakan isi nama koreksi', 'error');
     return;
+  }
+
+  if (correctName) {
+    const matchedEmp = allEmployees.find(e => e.name.toLowerCase() === correctName.toLowerCase() || e.variations.some(v => v.toLowerCase() === correctName.toLowerCase()));
+    if (matchedEmp) {
+      if (!correctNik || correctNik === '-') correctNik = matchedEmp.nik !== '-' ? matchedEmp.nik : '';
+    }
   }
 
   const btn = document.getElementById('btnSaveReview');
@@ -2558,12 +2582,19 @@ function initEditModal() {
     // Kirim format YYYY-MM-DD ke API agar Google Sheets tidak bingung
     const date = dateObj ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}` : rawDate;
     
-    const name = document.getElementById('editTxName').value;
+    let name = document.getElementById('editTxName').value.trim();
     const nominal = parseFloat(document.getElementById('editTxNominal').value);
-    const nik = document.getElementById('editTxNik').value;
+    let nik = document.getElementById('editTxNik').value.trim();
     const type = document.getElementById('editTxType').value;
     const pass = document.getElementById('editTxPassword').value;
     let notes = document.getElementById('editTxNotes').value;
+
+    if (action !== 'hapus') {
+      const matchedEmp = allEmployees.find(e => e.name.toLowerCase() === name.toLowerCase() || e.variations.some(v => v.toLowerCase() === name.toLowerCase()));
+      if (matchedEmp) {
+        if (!nik || nik === '-') nik = matchedEmp.nik !== '-' ? matchedEmp.nik : '';
+      }
+    }
 
     if (action === 'hapus') {
       notes = notes ? `[DIHAPUS] ${notes}` : '[DIHAPUS] Data diabaikan';
@@ -2730,7 +2761,9 @@ function initSearch() {
         const empVariations = allAliasesMap[id] || new Set([e.name]);
         const allTxs = allData.filter(d => {
           const dId = getEmpId(d);
-          return dId === id || empVariations.has(d.name);
+          if (dId === id) return true;
+          if (d.nik && d.nik !== '-' && d.nik !== '') return false; // Jangan gabungkan jika punya NIK lain
+          return empVariations.has(d.name);
         });
         
         let currentBalance = 0, accPrincipal = 0;
@@ -2864,7 +2897,9 @@ function showEmployee(name, nik = '') {
   // Get all transactions that match either the NIK or any of the known names for this identity
   let allTxs = allData.filter(d => {
     const dId = getEmpId(d);
-    return dId === id || variations.has(d.name);
+    if (dId === id) return true;
+    if (d.nik && d.nik !== '-' && d.nik !== '') return false; // Jangan gabungkan jika punya NIK lain
+    return variations.has(d.name);
   });
 
   list.classList.add('hidden');
