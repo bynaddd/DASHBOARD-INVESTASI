@@ -330,15 +330,25 @@ async function fetchData() {
     allData = json.data.map((row, i) => {
       const d = parseDateStr(row.bulanTahun);
       const ket = (row.keterangan || '').toLowerCase();
+      
+      let name = String(row.karyawan || '').trim();
+      let nik = String(row.nik || '').trim();
+      
+      // Normalisasi Data Muhammad Saifuddin
+      if (name.toLowerCase() === 'm. saifuddin' || name.toLowerCase() === 'm. saifudin') {
+        name = 'Muhammad Saifuddin';
+        nik = '3523121306880001';
+      }
+
       return {
         sheetRow: row.sheetRow,
         no: row.no || i + 1,
         date: d,
         dateStr: fmtDate(d),
-        name: String(row.karyawan || '').trim(),
+        name: name,
         jenis: row.jenisPotongan,
         nominal: row.nominal,
-        nik: String(row.nik || '').trim(),
+        nik: nik,
         keterangan: ket,
         type: (ket.includes('debet') || ket.includes('penarikan')) ? 'Penarikan' : 'Tabungan',
         isEdited: row.isEdited,
