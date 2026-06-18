@@ -55,8 +55,8 @@ async function fixSpreadsheet() {
 
       if (nama.toLowerCase() === 'm. saifuddin' || nama.toLowerCase() === 'm. saifudin' || nik.toLowerCase() === 'm. saifuddin') {
         updates.push({
-          range: `'${sheetName}'!C${rowIndex}:E${rowIndex}`,
-          values: [['Muhammad Saifuddin', nominal, '3523121306880001']]
+          range: `'${sheetName}'!E${rowIndex}`,
+          values: [['3523121306880001']]
         });
         console.log(`Mengoreksi Baris ${rowIndex} - Nama Lama: ${nama}, NIK Lama: ${nik}`);
       }

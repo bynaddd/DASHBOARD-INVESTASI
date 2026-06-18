@@ -336,7 +336,6 @@ async function fetchData() {
       
       // Normalisasi Data Muhammad Saifuddin
       if (name.toLowerCase() === 'm. saifuddin' || name.toLowerCase() === 'm. saifudin') {
-        name = 'Muhammad Saifuddin';
         nik = '3523121306880001';
       }
 
@@ -1407,6 +1406,7 @@ function renderAnomaliTable() {
   const endMonth = document.getElementById('anomaliFilterEndMonth')?.value || '';
   const filterStatus = document.getElementById('anomaliStatusFilter')?.value || '';
   const filterRepeat = document.getElementById('anomaliRepeatFilter')?.value || 'all';
+  const filterEmpStatus = document.getElementById('anomaliEmpStatusFilter')?.value || 'all';
   const yearVal = document.getElementById('anomaliFilterYear')?.value || new Date().getFullYear().toString();
   const year = yearVal === 'all' ? 'all' : parseInt(yearVal);
 
@@ -1460,6 +1460,14 @@ function renderAnomaliTable() {
     if (filterRepeat === 'repeat') {
       const id = a.nik && a.nik !== '-' ? a.nik : a.name;
       pass = pass && frequencyMap[id] > 1;
+    }
+
+    // 3.5. Employee Status Filter
+    if (filterEmpStatus !== 'all') {
+      const id = a.nik && a.nik !== '-' ? a.nik : a.name;
+      const status = allEmployeesStatus[id] || { isActive: false };
+      if (filterEmpStatus === 'on') pass = pass && status.isActive;
+      if (filterEmpStatus === 'off') pass = pass && !status.isActive;
     }
     
     // 4. Date filter (Custom Mode)
@@ -4544,6 +4552,7 @@ function exportAnomaliData() {
   const q = (document.getElementById('anomaliSearch')?.value || '').toLowerCase().trim();
   const s = document.getElementById('anomaliStatusFilter')?.value || '';
   const filterRepeat = document.getElementById('anomaliRepeatFilter')?.value || 'all';
+  const filterEmpStatus = document.getElementById('anomaliEmpStatusFilter')?.value || 'all';
   const mode = document.getElementById('anomaliFilterMode')?.value || 'custom';
   const startMonth = document.getElementById('anomaliFilterStartMonth')?.value || '';
   const endMonth = document.getElementById('anomaliFilterEndMonth')?.value || '';
@@ -4590,6 +4599,14 @@ function exportAnomaliData() {
     if (filterRepeat === 'repeat') {
       const id = a.nik && a.nik !== '-' ? a.nik : a.name;
       pass = pass && frequencyMap[id] > 1;
+    }
+
+    // 3.5. Employee Status Filter
+    if (filterEmpStatus !== 'all') {
+      const id = a.nik && a.nik !== '-' ? a.nik : a.name;
+      const status = allEmployeesStatus[id] || { isActive: false };
+      if (filterEmpStatus === 'on') pass = pass && status.isActive;
+      if (filterEmpStatus === 'off') pass = pass && !status.isActive;
     }
     
     // 4. Date filter (Custom Mode)
@@ -4712,7 +4729,7 @@ window.exportEmployeeData = function() {
 };
 
 // Event Listeners for Anomali Filters
-['anomaliSearch', 'anomaliFilterMode', 'anomaliFilterStartMonth', 'anomaliFilterEndMonth', 'anomaliStatusFilter', 'anomaliRepeatFilter', 'anomaliFilterYear'].forEach(id => {
+['anomaliSearch', 'anomaliFilterMode', 'anomaliFilterStartMonth', 'anomaliFilterEndMonth', 'anomaliStatusFilter', 'anomaliRepeatFilter', 'anomaliFilterYear', 'anomaliEmpStatusFilter'].forEach(id => {
   const el = document.getElementById(id);
   if (el) {
     el.addEventListener(id === 'anomaliSearch' ? 'input' : 'change', () => {
@@ -4759,6 +4776,8 @@ if (btnClearAnomaliFilter) {
     document.getElementById('anomaliFilterEndMonth').value = '';
     document.getElementById('anomaliStatusFilter').value = '';
     document.getElementById('anomaliRepeatFilter').value = 'all';
+    const empStatusEl = document.getElementById('anomaliEmpStatusFilter');
+    if (empStatusEl) empStatusEl.value = 'all';
     
     document.querySelectorAll('.sys-status-chk').forEach(chk => {
       chk.checked = (chk.value === 'MENCURIGAKAN' || chk.value === 'DICICIL');
