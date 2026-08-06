@@ -1,5 +1,9 @@
 const API_URL = '/api/sheets';
 const INTEREST_RATE = 0.03;
+// Cut-off date for interest logic: 18 Mei 2026
+const CUT_OFF_DATE = new Date('2026-05-18T00:00:00');
+// Feature flag: show interest components on dashboard. Set to true to display interest-related values.
+const SHOW_INTEREST = false; // Change to true to enable interest display
 let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false }, globalTotalSaldo = 0, globalTotalActive = 0, allEmployeesStatus = {}, globalReferenceDate = null;
 let empTxSort = { col: 0, asc: false }, currentEmpData = { name: '', nik: '' };
 let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
@@ -236,6 +240,7 @@ function calculateWithdrawalBreakdown(filteredData) {
   // Kita harus memproses seluruh data secara kronologis untuk mendapatkan saldo modal vs bunga yang akurat
 
   allData.forEach(t => {
+    if (t.isDeleted) return;
     const id = getEmpId(t);
     if (!empState[id]) empState[id] = { principal: 0, interest: 0, lastInterestMonth: null };
     const s = empState[id];
@@ -333,6 +338,9 @@ async function fetchData() {
       
       let name = String(row.karyawan || '').trim();
       let nik = String(row.nik || '').trim();
+      while (nik.startsWith("'") || nik.endsWith("'")) {
+        nik = nik.substring(1, nik.length - 1).trim();
+      }
       
       // Normalisasi Data Muhammad Saifuddin
       if (name.toLowerCase() === 'm. saifuddin' || name.toLowerCase() === 'm. saifudin') {
@@ -646,11 +654,11 @@ function renderIntelligence() {
   const lastMonthIn = lastMonthData.filter(d => d.type === 'Tabungan').reduce((sum, d) => sum + d.nominal, 0);
 
   if (summaryEl) {
-    let insight = "Money Box menunjukkan pertumbuhan saldo yang stabil bulan ini.";
+    let insight = "Money Box menunjukkan pertumbuhan saldo pokok investasi yang stabil bulan ini.";
     if (lastMonthIn > 0) {
       const growth = ((thisMonthIn - lastMonthIn) / lastMonthIn * 100);
-      if (growth > 5) insight = `Money Box menunjukkan pertumbuhan stabil dengan peningkatan setoran aktif sebesar ${growth.toFixed(1)}% MoM.`;
-      else if (growth < -5) insight = `Peringatan: Terjadi penurunan setoran sebesar ${Math.abs(growth).toFixed(1)}% dibanding bulan lalu.`;
+      if (growth > 5) insight = `Money Box menunjukkan pertumbuhan stabil dengan peningkatan setoran saldo pokok aktif sebesar ${growth.toFixed(1)}% MoM.`;
+      else if (growth < -5) insight = `Peringatan: Terjadi penurunan setoran saldo pokok sebesar ${Math.abs(growth).toFixed(1)}% dibanding bulan lalu.`;
     }
     summaryEl.textContent = insight;
   }
@@ -677,6 +685,7 @@ function renderIntelligence() {
 function renderSummary() {
   const filteredWithDates = globalFilteredData.filter(d => d.date);
   if (filteredWithDates.length === 0) return;
+  // If interest display is disabled, we'll adjust totals accordingly.
 
   // Use Last Deposit Date as reference for Summary
   const dataToUse = globalFilteredData.length > 0 || (document.querySelector('#dashboardTimeFilter button.active') && document.querySelector('#dashboardTimeFilter button.active').dataset.range !== 'all') ? globalFilteredData : allData;
@@ -720,8 +729,12 @@ function renderSummary() {
     lastMonthOut = 0;
   }
 
-  let total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
   let totalPrincipal = totalIn - totalOut;
+  let total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
+  // Override total to exclude interest if flag is false
+  if (!SHOW_INTEREST) {
+    total = totalPrincipal;
+  }
 
   if (isFiltered) {
      const range = document.querySelector('#dashboardTimeFilter button.active').dataset.range;
@@ -790,7 +803,14 @@ function renderSummary() {
   const setKPI = (id, val, current, last, isCurrency = true) => {
     const valEl = document.getElementById('kpi' + id);
     const trendEl = document.getElementById('kpi' + id + 'Trend'); 
-    if (valEl) valEl.textContent = isCurrency ? fmt(val) : val;
+    if (valEl) {
+      // For total balance card, adjust display based on SHOW_INTEREST flag
+      if (id === 'TotalSaldo') {
+        valEl.textContent = isCurrency ? fmt(total) : total;
+      } else {
+        valEl.textContent = isCurrency ? fmt(val) : val;
+      }
+    }
     if (trendEl) {
       if (last === 0) {
         trendEl.innerHTML = `<span class="trend-badge">--</span>`;
@@ -1221,7 +1241,12 @@ function calculateAnomalies() {
       const txMonth = t.date ? (t.date.getFullYear() + '-' + t.date.getMonth()) : null;
       if (t.type === 'Tabungan') {
         if (txMonth && lastInterestMonth !== txMonth) {
-          if (balance > 0) pendingInterest = balance * monthlyRate;
+          // Bunga hanya dihitung untuk periode transaksi sebelum cut-off date 18 Mei 2026
+          if (balance > 0 && (!t.date || t.date < CUT_OFF_DATE)) {
+            pendingInterest = balance * monthlyRate;
+          } else {
+            pendingInterest = 0;
+          }
           lastInterestMonth = txMonth;
         }
       }
@@ -2826,6 +2851,7 @@ function initSearch() {
         totalPaidDebt = Math.round(totalPaidDebt);
         
         const sisaSetoran = Math.max(0, Math.round(accPrincipal - totalPaidDebt));
+        const empBrk = calculateWithdrawalBreakdown(allTxs);
 
         return {
           No: i + 1,
@@ -2833,6 +2859,7 @@ function initSearch() {
           NIK: e.nik || '-',
           'Sisa Setoran': sisaSetoran,
           'Total Saldo Akhir': Math.round(currentBalance),
+          'Total Bunga yang Sudah Ditarik': Math.round(empBrk.bunga),
           'Status Aktif': status.isActive ? 'Aktif' : 'Tidak Aktif',
           'Transaksi Terakhir': status.lastDepositDate ? fmtDate(status.lastDepositDate) : '-'
         };
@@ -3087,16 +3114,6 @@ function showEmployee(name, nik = '') {
     </div>
   `;
 
-  const cards = [];
-  const uniqueMonths = new Set(allTxs.filter(tx => tx.date).map(tx => tx.date.getFullYear() + '-' + tx.date.getMonth()));
-  const avgContribution = uniqueMonths.size > 0 ? lifeIn / uniqueMonths.size : 0;
-  if (startDate) {
-    cards.push({ icon: 'fas fa-history', cls: 'yellow', label: 'Saldo Awal', value: fmt(saldoAwal), sub: `Per ${fmtDate(startDate)}` });
-  }
-  cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Akhir', value: fmt(Math.round(saldo)), sub: 'Kumulatif saat ini' });
-  cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
-  cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
-
   let totalPaidDebt = 0;
   const empSheetRows = new Set(allTxs.map(t => t.sheetRow));
   allAnomalies.forEach(a => {
@@ -3105,15 +3122,22 @@ function showEmployee(name, nik = '') {
     }
   });
   totalPaidDebt = Math.round(totalPaidDebt);
-
   const sisaSetoran = Math.max(0, Math.round(accPrincipal - totalPaidDebt));
-  let sisaSetoranSub = 'Setoran murni tersisa';
-  if (totalPaidDebt > 0) {
-    sisaSetoranSub += `<div style="margin-top:4px;">Untuk bayar selisih: <span style="font-weight:600; color:#ef4444;">${fmt(totalPaidDebt)}</span></div>`;
-  }
-  cards.push({ icon: 'fas fa-coins', cls: 'indigo', label: 'Sisa Setoran Saat Ini', value: fmt(Math.max(0, Math.round(sisaSetoran))), sub: sisaSetoranSub });
 
-  cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'Bunga', value: fmt(Math.round(exactBunga)), sub: `ROI: ${roi.toFixed(2)}%` });
+  const cards = [];
+  const uniqueMonths = new Set(allTxs.filter(tx => tx.date).map(tx => tx.date.getFullYear() + '-' + tx.date.getMonth()));
+  const avgContribution = uniqueMonths.size > 0 ? lifeIn / uniqueMonths.size : 0;
+  if (startDate) {
+    cards.push({ icon: 'fas fa-history', cls: 'yellow', label: 'Saldo Awal Pokok', value: fmt(saldoAwal), sub: `Per ${fmtDate(startDate)}` });
+  }
+  const isUserAdmin = currentUser && currentUser.role === 'admin';
+  cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Pokok', value: fmt(Math.max(0, Math.round(sisaSetoran))), sub: 'Dasar pencairan operasional saat ini' });
+  cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
+  cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
+
+  if (isUserAdmin) {
+    cards.push({ icon: 'fas fa-chart-line', cls: 'purple', label: 'Pengembangan (Bunga Historis)', value: fmt(Math.round(exactBunga)), sub: `ROI: ${roi.toFixed(2)}% (Audit Mode)` });
+  }
 
   document.getElementById('empCards').innerHTML = cards.map(c => `
     <div class="summary-card">

@@ -236,6 +236,7 @@ function calculateWithdrawalBreakdown(filteredData) {
   // Kita harus memproses seluruh data secara kronologis untuk mendapatkan saldo modal vs bunga yang akurat
 
   allData.forEach(t => {
+    if (t.isDeleted) return;
     const id = getEmpId(t);
     if (!empState[id]) empState[id] = { principal: 0, interest: 0, lastInterestMonth: null };
     const s = empState[id];
@@ -338,7 +339,13 @@ async function fetchData() {
         name: String(row.karyawan || '').trim(),
         jenis: row.jenisPotongan,
         nominal: row.nominal,
-        nik: String(row.nik || '').trim(),
+        nik: (() => {
+          let n = String(row.nik || '').trim();
+          while (n.startsWith("'") || n.endsWith("'")) {
+            n = n.substring(1, n.length - 1).trim();
+          }
+          return n;
+        })(),
         keterangan: ket,
         type: (ket.includes('debet') || ket.includes('penarikan')) ? 'Penarikan' : 'Tabungan',
         isEdited: row.isEdited,
