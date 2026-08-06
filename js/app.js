@@ -1002,7 +1002,6 @@ function renderTrendChart() {
 // ===== CASH FLOW CHART =====
 function renderCashFlowChart() {
   const monthly = {};
-  globalFilteredData.forEach(d => { if (!d.date) return; const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0'); if (!monthly[k]) monthly[k] = { in: 0, out: 0 }; d.type === 'Tabungan' ? monthly[k].in += d.nominal : monthly[k].out += d.nominal; });
   globalFilteredData.forEach(d => { if (!d.date || d.isDeleted) return; const k = d.date.getFullYear() + '-' + String(d.date.getMonth()).padStart(2, '0'); if (!monthly[k]) monthly[k] = { in: 0, out: 0 }; d.type === 'Tabungan' ? monthly[k].in += d.nominal : monthly[k].out += d.nominal; });
   const keys = Object.keys(monthly).sort().slice(-6); // last 6 months
   const labels = [], dataIn = [], dataOut = [], dataNet = [];
