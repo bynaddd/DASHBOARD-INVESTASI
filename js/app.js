@@ -3120,8 +3120,7 @@ function showEmployee(name, nik = '') {
       totalPaidDebt += (a.initialDebt - a.remainingDebt);
     }
   });
-  totalPaidDebt = Math.round(totalPaidDebt);
-  const sisaSetoran = Math.max(0, Math.round(accPrincipal - totalPaidDebt));
+  const rawSisaSetoran = Math.round(accPrincipal - totalPaidDebt);
 
   const cards = [];
   const uniqueMonths = new Set(allTxs.filter(tx => tx.date).map(tx => tx.date.getFullYear() + '-' + tx.date.getMonth()));
@@ -3130,7 +3129,7 @@ function showEmployee(name, nik = '') {
     cards.push({ icon: 'fas fa-history', cls: 'yellow', label: 'Saldo Awal Pokok', value: fmt(saldoAwal), sub: `Per ${fmtDate(startDate)}` });
   }
   const isUserAdmin = currentUser && currentUser.role === 'admin';
-  cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Saldo Pokok', value: fmt(Math.max(0, Math.round(sisaSetoran))), sub: 'Dasar pencairan operasional saat ini' });
+  cards.push({ icon: 'fas fa-wallet', cls: 'blue', label: 'Sisa Setoran', value: fmt(rawSisaSetoran), sub: 'Dasar pencairan operasional saat ini' });
   cards.push({ icon: 'fas fa-arrow-down', cls: 'green', label: 'Total Setoran', value: fmt(totalIn), sub: startDate ? 'Dalam periode filter' : `Rata-rata: ${fmt(Math.round(avgContribution))}/bln` });
   cards.push({ icon: 'fas fa-arrow-up', cls: 'red', label: 'Total Penarikan', value: fmt(totalOut), sub: empBrkHtml });
 
