@@ -3368,6 +3368,16 @@ function showEmployee(name, nik = '') {
     return 0;
   });
 
+  const colBunga = document.querySelector('#empTable th[data-col="6"]');
+  const colKumulatif = document.querySelector('#empTable th[data-col="7"]');
+  if (colBunga) colBunga.style.display = isUserAdmin ? '' : 'none';
+  if (colKumulatif) colKumulatif.style.display = isUserAdmin ? '' : 'none';
+
+  const colRecapBunga = document.querySelector('#empRecapTable th:nth-child(4)');
+  const colRecapKumulatif = document.querySelector('#empRecapTable th:nth-child(5)');
+  if (colRecapBunga) colRecapBunga.style.display = isUserAdmin ? '' : 'none';
+  if (colRecapKumulatif) colRecapKumulatif.style.display = isUserAdmin ? '' : 'none';
+
   document.querySelector('#empTable tbody').innerHTML = tableData.map((row, idx) => {
     const editedBadge = (!row.isDeleted && row.isEdited) ? `<span class="badge-status" style="font-size: 0.6rem; padding: 1px 4px; margin-left: 6px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 4px; vertical-align: middle;" title="Catatan: ${row.notes || '-'}">DIEDIT</span>` : '';
     const isAdmin = currentUser && currentUser.role === 'admin';
@@ -3385,8 +3395,8 @@ function showEmployee(name, nik = '') {
       <td style="color: ${row.balance < 0 ? '#ef4444' : ''};">${row.jenis}${row.linkBtn}</td>
       <td style="font-weight:600; color: ${row.balance < 0 ? '#ef4444' : ''};">${nominalDisplay}</td>
       <td><span class="badge ${row.type === 'Tabungan' ? 'in' : 'out'}">${row.type}</span></td>
-      <td style="color:${row.balance < 0 ? '#ef4444' : '#f59e0b'}; font-weight:600;">${row.bungaDisplay}</td>
-      <td style="font-weight:700; color:${row.balance < 0 ? '#ef4444' : '#334155'};">${fmt(row.balance)}</td>
+      <td style="color:${row.balance < 0 ? '#ef4444' : '#f59e0b'}; font-weight:600; ${isUserAdmin ? '' : 'display:none;'}">${row.bungaDisplay}</td>
+      <td style="font-weight:700; color:${row.balance < 0 ? '#ef4444' : '#334155'}; ${isUserAdmin ? '' : 'display:none;'}">${fmt(row.balance)}</td>
       <td>${editBtn}</td>
     </tr>
   `}).join('');
@@ -3469,8 +3479,8 @@ function showEmployee(name, nik = '') {
         <td style="font-weight: 600;">${m.monthName} ${filterYear}</td>
         <td style="color: #10b981;">${fmt(m.totalIn)}</td>
         <td style="color: #ef4444;">${fmt(m.totalOut)}</td>
-        <td style="color: #f59e0b;">${fmt(Math.round(m.totalBunga))}</td>
-        <td style="font-weight: 700;">${fmt(Math.round(m.balance))}</td>
+        <td style="color: #f59e0b; ${isUserAdmin ? '' : 'display:none;'}">${fmt(Math.round(m.totalBunga))}</td>
+        <td style="font-weight: 700; ${isUserAdmin ? '' : 'display:none;'}">${fmt(Math.round(m.balance))}</td>
       </tr>
     `).join('');
   }
