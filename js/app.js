@@ -4,7 +4,7 @@ const INTEREST_RATE = 0.03;
 const CUT_OFF_DATE = new Date('2026-05-18T00:00:00');
 // Feature flag: show interest components on dashboard. Set to true to display interest-related values.
 const SHOW_INTEREST = false; // Change to true to enable interest display
-let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false }, globalTotalSaldo = 0, globalTotalActive = 0, allEmployeesStatus = {}, globalReferenceDate = null;
+let allData = [], globalFilteredData = [], charts = {}, txPage = 1, txPerPage = 20, txSort = { col: null, asc: true }, allAnomalies = [], allReviews = [], allEmployees = [], anomaliSort = { col: 0, asc: false }, globalTotalSaldo = 0, globalTotalPositiveSisaSetoran = 0, globalTotalActive = 0, allEmployeesStatus = {}, globalReferenceDate = null;
 let empTxSort = { col: 0, asc: false }, currentEmpData = { name: '', nik: '' };
 let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
 
@@ -730,11 +730,8 @@ function renderSummary() {
   }
 
   let totalPrincipal = totalIn - totalOut;
-  let total = typeof globalTotalSaldo !== 'undefined' ? globalTotalSaldo : (totalIn - totalOut);
-  // Override total to exclude interest if flag is false
-  if (!SHOW_INTEREST) {
-    total = totalPrincipal;
-  }
+  let totalPositiveSetoran = typeof globalTotalPositiveSisaSetoran !== 'undefined' ? globalTotalPositiveSisaSetoran : 0;
+  let total = totalPrincipal;
 
   if (isFiltered) {
      const range = document.querySelector('#dashboardTimeFilter button.active').dataset.range;
@@ -758,29 +755,24 @@ function renderSummary() {
      let cumIn = 0, cumOut = 0;
      const emps = {};
      const sorted = [...cumulativeData].sort((a,b)=>a.date-b.date);
-     const monthlyRate = 0.03 / 12;
      sorted.forEach(d => {
-       
        if (d.isDeleted) return;
        const id = getEmpId(d);
-       if (!emps[id]) emps[id] = { balance: 0, lastInterestMonth: null };
-       
+       if (!emps[id]) emps[id] = { in: 0, out: 0 };
        if (d.type === 'Tabungan') {
          cumIn += d.nominal;
-         const txMonth = d.date ? (d.date.getFullYear() + '-' + d.date.getMonth()) : null;
-         let interest = 0;
-         if (txMonth && emps[id].lastInterestMonth !== txMonth) {
-           if (emps[id].balance > 0) interest = emps[id].balance * monthlyRate;
-           emps[id].lastInterestMonth = txMonth;
-         }
-         emps[id].balance += interest + d.nominal;
+         emps[id].in += d.nominal;
        } else { 
          cumOut += d.nominal;
-         emps[id].balance -= d.nominal; 
+         emps[id].out += d.nominal;
        }
      });
-     total = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
      totalPrincipal = cumIn - cumOut;
+     total = totalPrincipal;
+     totalPositiveSetoran = Object.values(emps).reduce((sum, e) => {
+       const net = e.in - e.out;
+       return sum + (net > 0 ? net : 0);
+     }, 0);
   }
 
   const netFlow = monthIn - monthOut;
@@ -804,9 +796,10 @@ function renderSummary() {
     const valEl = document.getElementById('kpi' + id);
     const trendEl = document.getElementById('kpi' + id + 'Trend'); 
     if (valEl) {
-      // For total balance card, adjust display based on SHOW_INTEREST flag
       if (id === 'TotalSaldo') {
         valEl.textContent = isCurrency ? fmt(total) : total;
+      } else if (id === 'ModalPokok') {
+        valEl.textContent = isCurrency ? fmt(totalPositiveSetoran) : totalPositiveSetoran;
       } else {
         valEl.textContent = isCurrency ? fmt(val) : val;
       }
@@ -825,7 +818,7 @@ function renderSummary() {
   };
 
   setKPI('TotalSaldo', total, total, total - (monthIn - monthOut));
-  setKPI('ModalPokok', totalPrincipal, totalPrincipal, totalPrincipal - (monthIn - monthOut));
+  setKPI('ModalPokok', totalPositiveSetoran, totalPositiveSetoran, totalPositiveSetoran - (monthIn - monthOut));
   setKPI('SetoranBln', monthIn, monthIn, lastMonthIn);
   setKPI('PenarikanBln', monthOut, monthOut, lastMonthOut);
   setKPI('NetGrowth', netFlow, netFlow, lastNetFlow);
@@ -1389,6 +1382,7 @@ function calculateAnomalies() {
   });
 
   globalTotalSaldo = Object.values(emps).reduce((sum, e) => sum + e.balance, 0);
+  globalTotalPositiveSisaSetoran = Object.values(emps).reduce((sum, e) => sum + (e.sisaSetoran > 0 ? e.sisaSetoran : 0), 0);
   globalTotalActive = Object.values(emps).filter(e => e.isActive).length;
   allEmployeesStatus = emps;
 
